@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict/>
+	</array>
+    
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>P2Pclipboard uses Bluetooth to discover nearby devices for clipboard synchronization.</string>
+
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>P2Pclipboard uses the local network to find and connect to other clipboard-sync devices.</string>
+
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_p2pclipboard._tcp</string>
+    </array>
+</dict>
+</plist>
