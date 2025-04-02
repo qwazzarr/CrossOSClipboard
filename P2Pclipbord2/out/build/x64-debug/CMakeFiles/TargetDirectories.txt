@@ -1,0 +1,3 @@
+C:/Documents/SelfCode/P2Pclipbord2/out/build/x64-debug/CMakeFiles/P2PClipboard.dir
+C:/Documents/SelfCode/P2Pclipbord2/out/build/x64-debug/CMakeFiles/edit_cache.dir
+C:/Documents/SelfCode/P2Pclipbord2/out/build/x64-debug/CMakeFiles/rebuild_cache.dir
