@@ -1,3 +1,0 @@
-C:/Documents/SelfCode/P2Pclipbord2/out/build/CMakeFiles/P2PClipboard.dir
-C:/Documents/SelfCode/P2Pclipbord2/out/build/CMakeFiles/ALL_BUILD.dir
-C:/Documents/SelfCode/P2Pclipbord2/out/build/CMakeFiles/ZERO_CHECK.dir
