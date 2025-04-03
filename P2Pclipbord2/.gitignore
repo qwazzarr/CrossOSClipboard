@@ -1,3 +1,12 @@
 
 ./out
 out
+.vs/
+*.ipch
+*.db
+*.opendb
+*.suo
+*.user
+*.sdf
+*.opensdf
+ipch/
