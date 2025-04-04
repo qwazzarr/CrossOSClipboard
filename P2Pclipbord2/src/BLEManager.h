@@ -95,6 +95,8 @@ private:
     winrt::event_token subscriptionChangedToken;
     winrt::event_token wakeupWriteRequestedToken;
 
+    bool testEncodeDecodeMessage(const std::string& data);
+
     bool hasSubscribedClients = false;
     std::shared_ptr<GattLocalCharacteristic> wakeupCharacteristicRef;
     std::shared_ptr<GattLocalCharacteristic> dataCharacteristicRef;

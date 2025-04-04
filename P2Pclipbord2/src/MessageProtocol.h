@@ -63,14 +63,13 @@ private:
         std::vector<uint8_t> payload;
     };
 
-    // BLE packet size constraint
-    static constexpr int BLE_MAX_CHUNK_SIZE = 512;
-
     // Current protocol version
     static constexpr uint16_t PROTOCOL_VERSION = 1;  //
 
     // Header size: 4 (length) + 2 (version) + 1 (type) + 4 (transferId) + 4 (chunkIndex) + 4 (totalChunks)
     static constexpr int HEADER_SIZE = 19;  // Increased from 15 to 19 due to expanded chunk counter fields
+
+    static constexpr int BLE_MAX_CHUNK_SIZE = 519 - HEADER_SIZE;
 
     // Generate a unique transfer ID for new messages
     static uint32_t generateTransferId();

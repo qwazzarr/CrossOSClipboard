@@ -546,53 +546,155 @@ void BLEManager::handleCharacteristicReadRequested(GattLocalCharacteristic sende
     }
 }
 
-bool BLEManager::sendClipboardData(const std::string& data) {
+bool BLEManager::testEncodeDecodeMessage(const std::string& data) {
     try {
-        std::cout << "Sending clipboard data via GATT characteristic, length: " << data.length() << std::endl;
-
-        // Store the clipboard content for sending to new connections
-        clipboardContent = data;
-
-        // Check if we have a valid data characteristic reference
-        if (!dataCharacteristicRef) {
-            std::cerr << "No data characteristic available (reference is null)" << std::endl;
-            return false;
-        }
+        std::cout << "\n=== Testing Encode/Decode Process ===\n" << std::endl;
+        std::cout << "Original data: \"" << data << "\"" << std::endl;
+        std::cout << "Length: " << data.length() << " bytes" << std::endl;
 
         // Convert string to vector of bytes
         std::vector<uint8_t> payload(data.begin(), data.end());
 
         // Encode using MessageProtocol
-        auto encodedChunks = MessageProtocol::encodeMessage(MessageContentType::PLAIN_TEXT, payload, TransportType::BLE);
+        auto encodedChunks = MessageProtocol::encodeMessage(
+            MessageContentType::PLAIN_TEXT, payload, TransportType::BLE);
 
         if (encodedChunks.empty()) {
             std::cerr << "Failed to encode message" << std::endl;
             return false;
         }
 
-        std::cout << "Encoded into " << encodedChunks.size() << " chunks for BLE transmission" << std::endl;
+        std::cout << "Successfully encoded into " << encodedChunks.size() << " chunks" << std::endl;
 
+        // Print hex representation of the first few bytes of the first chunk
+        if (!encodedChunks.empty() && encodedChunks[0].size() > 0) {
+            std::cout << "First chunk header bytes: ";
+            size_t bytesToPrint = (std::min)(encodedChunks[0].size(), static_cast<size_t>(20));
+            for (size_t i = 0; i < bytesToPrint; i++) {
+                printf("%02X ", encodedChunks[0][i]);
+            }
+            std::cout << std::endl;
+        }
+
+        // Now test the decoding process
+        std::shared_ptr<MessageProtocol::Message> decodedMessage = nullptr;
+
+        // Process each chunk through the decoder
+        for (size_t i = 0; i < encodedChunks.size(); i++) {
+            std::cout << "Processing chunk " << (i + 1) << "/" << encodedChunks.size()
+                << " (" << encodedChunks[i].size() << " bytes)" << std::endl;
+
+            // Try to decode this chunk
+            decodedMessage = MessageProtocol::decodeData(encodedChunks[i]);
+
+            if (decodedMessage) {
+                std::cout << "Decoding complete after chunk " << (i + 1) << std::endl;
+                break;
+            }
+            else if (i < encodedChunks.size() - 1) {
+                std::cout << "Partial message, continuing to next chunk..." << std::endl;
+            }
+        }
+
+        // Verify decoding succeeded
+        if (!decodedMessage) {
+            std::cerr << "Failed to decode message" << std::endl;
+            return false;
+        }
+
+        // Check content type
+        if (decodedMessage->contentType != MessageContentType::PLAIN_TEXT) {
+            std::cerr << "Decoded message has incorrect content type: "
+                << static_cast<int>(decodedMessage->contentType) << std::endl;
+            return false;
+        }
+
+        // Convert payload back to string and verify contents
+        std::string decodedString = decodedMessage->getStringPayload();
+
+        // Print the decoded content with clear markers
+        std::cout << "\n======== DECODED MESSAGE CONTENT ========" << std::endl;
+        std::cout << decodedString << std::endl;
+        std::cout << "========= END DECODED CONTENT ==========" << std::endl;
+
+        std::cout << "Decoded length: " << decodedString.length() << " bytes" << std::endl;
+
+        // Check if original and decoded strings match
+        bool matches = (data == decodedString);
+        std::cout << "Original and decoded data "
+            << (matches ? "MATCH" : "DO NOT MATCH") << std::endl;
+
+        if (!matches) {
+            // Print first mismatch location for debugging
+            for (size_t i = 0; i < (std::min)(data.length(), decodedString.length()); i++) {
+                if (data[i] != decodedString[i]) {
+                    std::cout << "First mismatch at position " << i << ": "
+                        << "Original '" << data[i] << "' vs Decoded '" << decodedString[i] << "'"
+                        << std::endl;
+                    break;
+                }
+            }
+
+            // If lengths differ, report that
+            if (data.length() != decodedString.length()) {
+                std::cout << "Length mismatch: Original = " << data.length()
+                    << ", Decoded = " << decodedString.length() << std::endl;
+            }
+        }
+
+        std::cout << "\n=== Encode/Decode Test " << (matches ? "PASSED" : "FAILED") << " ===\n" << std::endl;
+        return matches;
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "Exception in testEncodeDecodeMessage: " << ex.what() << std::endl;
+        return false;
+    }
+    catch (...) {
+        std::cerr << "Unknown error in testEncodeDecodeMessage" << std::endl;
+        return false;
+    }
+}
+
+bool BLEManager::sendClipboardData(const std::string& data) {
+    try {
+        std::cout << "Sending clipboard data via GATT characteristic, length: " << data.length() << std::endl;
+        // Store the clipboard content for sending to new connections
+        clipboardContent = data;
+        // Check if we have a valid data characteristic reference
+        if (!dataCharacteristicRef) {
+            std::cerr << "No data characteristic available (reference is null)" << std::endl;
+            return false;
+        }
+        // Convert string to vector of bytes
+        std::vector<uint8_t> payload(data.begin(), data.end());
+
+        // Encode using MessageProtocol
+        auto encodedChunks = MessageProtocol::encodeMessage(MessageContentType::PLAIN_TEXT, payload, TransportType::BLE);
+        if (encodedChunks.empty()) {
+            std::cerr << "Failed to encode message" << std::endl;
+            return false;
+        }
+
+        // Test encoding/decoding before sending
+        testEncodeDecodeMessage(data);
+
+        std::cout << "Encoded into " << encodedChunks.size() << " chunks for BLE transmission" << std::endl;
         // Send each chunk as a separate notification/write
         for (size_t i = 0; i < encodedChunks.size(); i++) {
             // Create a buffer with the chunk data
             auto writer = DataWriter();
             writer.WriteBytes(encodedChunks[i]);
             auto buffer = writer.DetachBuffer();
-
             try {
                 // Send the notification
                 auto asyncOp = dataCharacteristicRef->NotifyValueAsync(buffer);
-
                 // Wait for it to complete without blocking indefinitely
                 auto status = asyncOp.wait_for(std::chrono::seconds(1));
-
                 if (status != winrt::Windows::Foundation::AsyncStatus::Completed) {
                     std::cerr << "Chunk " << (i + 1) << "/" << encodedChunks.size() << " send operation failed or timed out" << std::endl;
                     return false;
                 }
-
                 std::cout << "Sent chunk " << (i + 1) << "/" << encodedChunks.size() << " (" << encodedChunks[i].size() << " bytes)" << std::endl;
-
                 // Add a small delay between chunks to avoid overwhelming the receiver
                 if (i < encodedChunks.size() - 1) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -603,7 +705,6 @@ bool BLEManager::sendClipboardData(const std::string& data) {
                 return false;
             }
         }
-
         std::cout << "Clipboard data sent successfully via GATT" << std::endl;
         return true;
     }

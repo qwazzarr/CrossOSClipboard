@@ -238,11 +238,28 @@ std::vector<std::vector<uint8_t>> MessageProtocol::chunkedData(
     int chunkSize
 ) {
     std::vector<std::vector<uint8_t>> chunks;
+    size_t position = 0;
 
-    for (size_t i = 0; i < data.size(); i += chunkSize) {
-        size_t remainingSize = std::min(static_cast<size_t>(chunkSize), data.size() - i);
-        std::vector<uint8_t> chunk(data.begin() + i, data.begin() + i + remainingSize);
+    while (position < data.size()) {
+        // Calculate the end position for this chunk
+        size_t endPos = std::min(position + static_cast<size_t>(chunkSize), data.size());
+
+        // If we're not at the end of the data and might be in the middle of a UTF-8 character
+        if (endPos < data.size()) {
+            // Check if we're in the middle of a UTF-8 multi-byte character
+            // UTF-8 continuation bytes always start with bits 10xxxxxx (0x80-0xBF)
+            while (endPos > position && (data[endPos] & 0xC0) == 0x80) {
+                // Move back to find the start of the character
+                endPos--;
+            }
+        }
+
+        // Create the chunk from position to endPos
+        std::vector<uint8_t> chunk(data.begin() + position, data.begin() + endPos);
         chunks.push_back(std::move(chunk));
+
+        // Move to the next position
+        position = endPos;
     }
 
     return chunks;
