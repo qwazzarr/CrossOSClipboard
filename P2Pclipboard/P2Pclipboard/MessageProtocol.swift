@@ -10,7 +10,7 @@ enum TransportType {
 // MARK: - Protocol Handler
 class MessageProtocol {
     // BLE packet size constraint
-    private static let bleMaxChunkSize = 512
+    private static let bleMaxChunkSize = 519 - headerSize
     
     // Current protocol version
     private static let protocolVersion: UInt16 = 1
@@ -198,17 +198,34 @@ class MessageProtocol {
     
     // MARK: - Helper Methods
     
-    /// Splits data into chunks of specified size
+    /// Splits data into chunks of specified size, respecting UTF-8 character boundaries
     private static func chunkedData(data: Data, chunkSize: Int) -> [Data] {
         var chunks: [Data] = []
-        var remainingData = data
+        var position = 0
         
-        while !remainingData.isEmpty {
-            let chunk = remainingData.prefix(chunkSize)
+        while position < data.count {
+            // Calculate the end position for this chunk
+            var endPos = min(position + chunkSize, data.count)
+            
+            // If we're not at the end of the data and the end position might be in the middle of a UTF-8 character
+            if endPos < data.count {
+                // Check if we're in the middle of a UTF-8 multi-byte character
+                // UTF-8 continuation bytes always start with bits 10xxxxxx (so value & 0xC0 == 0x80)
+                while endPos > position && (data[endPos] & 0xC0) == 0x80 {
+                    // Move back to find the start of the character
+                    endPos -= 1
+                }
+            }
+            
+            // Extract the chunk from position to endPos
+            let chunk = data[position..<endPos]
             chunks.append(chunk)
-            remainingData = remainingData.dropFirst(chunk.count)
+            
+            // Move to the next position
+            position = endPos
         }
         
         return chunks
     }
 }
+

@@ -30,7 +30,11 @@ class ClipboardSyncManager: ObservableObject {
     private var ignoreNextClipboardChange = false
     //exists to ignore the first message that receives from either ble or tcp connection, since the behaviour of a server to immidiately send its clipboard content when the connetcion is established
     private var ignoreNextIncomingMessage = false
+    
+    private var lastPasteboardChangeCount: Int = 0
     private var clipboardCheckTimer: Timer?
+    
+    private let imageHandler = ClipboardImageHandler()
     
     // Private initializer for singleton pattern
     private init() {
@@ -67,20 +71,16 @@ class ClipboardSyncManager: ObservableObject {
         connectionStatus = "Disconnected"
     }
     
-    // Force push current clipboard content to all connected devices
-    func sendClipboardContent() {
-        if let content = getClipboardContent() {
-            print("Manually sending clipboard content")
-            broadcast(content)
-        }
-    }
-    
     // MARK: - Connection and Message Handling
     
     private func setupCallbacks() {
         // Set up MDNSBrowser callbacks
-        mdnsBrowser.setMessageCallback { [weak self] message in
-            self?.handleIncomingMessage(message)
+        mdnsBrowser.setMessageCallback { [weak self] data, contentType in
+            // Make sure to safely unwrap self first to prevent potential memory issues
+            guard let self = self else { return }
+            
+            // Call your updated method that handles data and content type
+            self.handleIncomingMessage(data, contentType: contentType)
         }
         
         mdnsBrowser.setConnectionCallback { [weak self] connected in
@@ -127,9 +127,9 @@ class ClipboardSyncManager: ObservableObject {
             }
         }
         
-        bleManager.setMessageCallback { [weak self] message in
+        bleManager.setMessageCallback { [weak self] data, contentType in
             // Handle messages received via BLE GATT characteristic
-            self?.handleIncomingMessage(message)
+            self?.handleIncomingMessage(data, contentType: contentType)
         }
     }
     
@@ -147,10 +147,10 @@ class ClipboardSyncManager: ObservableObject {
         }
     }
     
-    private func handleIncomingMessage(_ message: String) {
+    private func handleIncomingMessage(_ data: Data, contentType: MessageContentType) {
         if !ignoreNextIncomingMessage {
             // Process the clipboard content directly
-            handleReceivedClipboardContent(message)
+            updateClipboard(data: data, contentType: contentType)
         } else {
             print("Ignoring first message after connection")
             ignoreNextIncomingMessage = false
@@ -203,29 +203,51 @@ class ClipboardSyncManager: ObservableObject {
     #endif
     
     private func checkClipboardForChanges() {
-        guard let currentContent = getClipboardContent() else { return }
         
-        if currentContent != lastLocalClipboardContent && !ignoreNextClipboardChange {
-            print("Clipboard changed: \(currentContent)")
-            lastLocalClipboardContent = currentContent
+        let currentChangeCount = NSPasteboard.general.changeCount
+        if currentChangeCount != lastPasteboardChangeCount {
             
-            // Broadcast to connected devices
-            broadcast(currentContent)
+            lastPasteboardChangeCount = currentChangeCount
+            // First check for images
+            if imageHandler.hasImage() {
+                handleClipboardImageChange()
+            }
+            // Then check for text
+            else if let currentContent = getClipboardText() {
+                handleClipboardTextChange(currentContent)
+            }
         }
-        
-        ignoreNextClipboardChange = false
     }
     
-    private func handleReceivedClipboardContent(_ content: String) {
-        print("Handling received clipboard content: \(content)")
-        
-        Task { @MainActor in
-            lastReceivedContent = content
+    /// Process a clipboard image change
+     private func handleClipboardImageChange() {
+         print("Clipboard contains image, checking if it's new...")
+         
+         // Get image from clipboard with compression along with original hash
+         if let imageResult = imageHandler.getImageFromClipboard(format: .jpeg,
+                                                                 isCompressed: self.isNetworkConnected || self.mdnsBrowser.hasCachedServer) {
+             let imageData = imageResult.data
+             let originalHash = imageResult.originalHash
+             
+             print("Clipboard image changed, hash: \(originalHash)")
+             
+             // Broadcast image to connected devices
+             broadcastData(imageData, contentType: .jpegImage)
+
+         } else {
+             print("Failed to get image data from clipboard")
+         }
+     }
+    
+    private func handleClipboardTextChange(_ currentContent: String) {
+        if currentContent != lastLocalClipboardContent {
+            print("Clipboard text changed: \(currentContent)")
+            lastLocalClipboardContent = currentContent
             
-            // Update the clipboard
-            updateClipboard(with: content)
-            
-            lastLocalClipboardContent = content
+            // Broadcast text to connected devices
+            if let data = currentContent.data(using: .utf8) {
+                broadcastData(data, contentType: .plainText)
+            }
         }
     }
     
@@ -239,38 +261,40 @@ class ClipboardSyncManager: ObservableObject {
         #endif
     }
     
-    private func updateClipboard(with string: String) {
+    private func updateClipboard(data: Data, contentType: MessageContentType) {
         ignoreNextClipboardChange = true
         
-        #if os(iOS)
-        UIPasteboard.general.string = string
-        #elseif os(macOS)
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(string, forType: .string)
-        #endif
-        
-        lastLocalClipboardContent = string
+        switch contentType {
+            case .plainText:
+                let text = String(data: data, encoding: .utf8)!
+                setClipboardText(text)
+            case .jpegImage:
+                imageHandler.setClipboardImage(data, format: .jpeg)
+            case .pngImage:
+                imageHandler.setClipboardImage(data, format: .png)
+            default:
+                print("Unsupported content type for clipboard update")
+        }
     }
     
     // MARK: - Communication
     
-    // Broadcast clipboard content to all connected devices
-    private func broadcast(_ content: String) {
+    /// Send data to all connected devices
+    private func broadcastData(_ data: Data, contentType: MessageContentType) {
+        // First try to send via network connection
         if isNetworkConnected || mdnsBrowser.hasCachedServer {
-            // Use TCP if available
-            sendViaNetwork(content)
-        } else if isBleConnected { 
-            // Fall back to BLE if TCP not available but BLE is connected
-            sendViaBLE(content)
-        } else {
-            print("Unable to send clipboard content - no active connections")
+            sendViaNetwork(data, contentType: contentType)
         }
-        
-       //ignoreNextIncomingMessage = true // it will come from the server and we sort of want to ignore it
+        // Fall back to BLE if network is not available
+        else if isBleConnected {
+            sendViaBLE(data, contentType: contentType)
+        }
+        else {
+            print("No available connections for sending data")
+        }
     }
     
-    private func sendViaNetwork(_ message: String) {
+    private func sendViaNetwork(_ data: Data , contentType: MessageContentType) {
         if !isNetworkConnected {
             // Connect first if not already connected
             mdnsBrowser.connectToServerIfAvailable()
@@ -278,28 +302,57 @@ class ClipboardSyncManager: ObservableObject {
             // Give it a moment to connect
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 if self?.isNetworkConnected == true {
-                    self?.mdnsBrowser.sendMessage(message: message)
+                    self?.mdnsBrowser.sendMessage(data: data, contentType: contentType)
                     print("Sent clipboard content via TCP network")
                 } else {
                     // Fall back to BLE if network connection failed
-                    self?.sendViaBLE(message)
+                    self?.sendViaBLE(data , contentType: contentType)
                 }
             }
         } else {
             // Already connected, just send
-            mdnsBrowser.sendMessage(message: message)
+            mdnsBrowser.sendMessage(data: data, contentType: contentType)
             print("Sent clipboard content via TCP network")
         }
     }
     
-    private func sendViaBLE(_ message: String) {
+    private func sendViaBLE(_ data: Data, contentType: MessageContentType) {
         if isBleConnected {
-            bleManager.sendMessage(message: message)
+            bleManager.sendMessage(data: data, contentType: contentType)
             print("Sent clipboard content via BLE GATT characteristic")
         } else {
             print("No BLE connection available")
         }
     }
+    
+    // MARK: - Clipboard Operations
+    
+    /// Get text from clipboard
+    private func getClipboardText() -> String? {
+        #if os(iOS)
+        return UIPasteboard.general.string
+        #elseif os(macOS)
+        return NSPasteboard.general.string(forType: .string)
+        #else
+        return nil
+        #endif
+    }
+    
+    /// Set text to clipboard
+    private func setClipboardText(_ text: String) {
+        ignoreNextClipboardChange = true
+        
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        #endif
+        
+        lastLocalClipboardContent = text
+    }
+    
     
     deinit {
         #if os(iOS)

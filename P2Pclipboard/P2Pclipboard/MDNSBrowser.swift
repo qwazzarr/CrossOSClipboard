@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 // Callbacks for network communication
-typealias MDNSMessageCallback = (String) -> Void
+typealias MDNSMessageCallback = (Data, MessageContentType) -> Void
 typealias MDNSConnectionCallback = (Bool) -> Void
 
 @MainActor
@@ -312,31 +312,31 @@ class MDNSBrowser: ObservableObject {
                 
                 // Forward to callback
                 Task { @MainActor in
-                    self.messageCallback?(text)
+                    self.messageCallback?(message.payload, message.contentType)
                 }
             }
         
-        case .htmlContent:
-            if let html = message.stringPayload {
-                print("Received HTML content via TCP")
-                
-                // Forward to callback
-                Task { @MainActor in
-                    self.messageCallback?(html)
-                }
+        case .pngImage, .jpegImage:
+            print("Received image that we can process")
+            Task { @MainActor in
+                self.messageCallback?(message.payload, message.contentType)
             }
-        
-        case .pngImage, .jpegImage, .pdfDocument, .rtfText:
+            
+        case .pdfDocument, .rtfText:
             // Handle binary content types
             print("Received binary content of type: \(message.contentType), size: \(message.payload.count) bytes")
+        default:
+            print("Received unsupported content type: \(message.contentType)")
         }
+    
+        
     }
     
     // MARK: - Sending Messages
     
-    func sendMessage(message: String, completion: (() -> Void)? = nil) {
+    func sendMessage(data: Data, completion: (() -> Void)? = nil , contentType: MessageContentType) {
         // For TCP connections, we can use the TCP optimization
-        let messageChunks = MessageProtocol.encodeTextMessage(text: message, transport: .tcp)
+        let messageChunks = MessageProtocol.encodeMessage(contentType: contentType, payload: data, transport: .tcp)
         
         guard let connection = connection, connection.state == .ready else {
             print("Cannot send message - no active connection")
