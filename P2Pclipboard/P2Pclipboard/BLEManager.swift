@@ -45,6 +45,13 @@ class BLEManager: NSObject, ObservableObject {
     private var maxConnectionAttempts = 3
     private var lastConnectedPeripheralIdentifier: UUID?
     
+    //handling writequeues
+    private var writeQueue: [Data] = []
+    private var isTransferringData = false
+    private var currentWriteOperation: (chunks: [Data], contentType: MessageContentType, startTime: Date, totalBytes: Int)?
+    private var currentChunkIndex = 0
+    
+    
     // Track discovered devices to avoid duplicate connections
     private var discoveredDeviceIds = Set<UUID>()
     
@@ -119,7 +126,6 @@ class BLEManager: NSObject, ObservableObject {
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
     
-    // Send message via BLE by writing to data characteristic
     func sendMessage(data: Data, contentType: MessageContentType) {
         guard let peripheral = connectedDevice,
               let characteristic = dataCharacteristic,
@@ -128,26 +134,76 @@ class BLEManager: NSObject, ObservableObject {
             return
         }
         
+        // Record the start time and total bytes
+        let startTime = Date()
+        let totalBytes = data.count
+        
         // Encode message using MessageProtocol
         let transportType: TransportType = .ble
-        let encodedChunks = MessageProtocol.encodeMessage(contentType: contentType,payload: data, transport: transportType)
+        let encodedChunks = MessageProtocol.encodeMessage(contentType: contentType, payload: data, transport: transportType)
         
-        print("Sending \(encodedChunks.count) chunks via BLE GATT characteristic")
+        print("Queuing \(encodedChunks.count) chunks via BLE GATT characteristic (\(totalBytes) bytes total)")
         
-        // Send each chunk with a small delay between them
-        for (index, chunk) in encodedChunks.enumerated() {
-            // Use a delay to avoid overwhelming the peripheral
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.05) { [weak self] in
-                guard let self = self,
-                      self.connectedDevice?.state == .connected else {
-                    print("Device disconnected during chunk sending")
-                    return
-                }
-                
-                peripheral.writeValue(chunk, for: characteristic, type: .withoutResponse)
-                print("Sent chunk \(index+1)/\(encodedChunks.count) (\(chunk.count) bytes)")
-            }
+        // Store the write operation
+        currentWriteOperation = (chunks: encodedChunks, contentType: contentType, startTime: startTime, totalBytes: totalBytes)
+        currentChunkIndex = 0
+        
+        // Start the sending process
+        sendNextChunk()
+    }
+    
+    
+    private func sendNextChunk() {
+        guard let peripheral = connectedDevice,
+              let characteristic = dataCharacteristic,
+              peripheral.state == .connected,
+              let currentOp = currentWriteOperation,
+              currentChunkIndex < currentOp.chunks.count else {
+            // If we're done or can't continue, reset state
+            completeCurrentTransfer()
+            return
         }
+        
+        // Check if the peripheral is ready to receive data
+        if peripheral.canSendWriteWithoutResponse {
+            let chunk = currentOp.chunks[currentChunkIndex]
+            
+            peripheral.writeValue(chunk, for: characteristic, type: .withoutResponse)
+            print("Sent chunk \(currentChunkIndex + 1)/\(currentOp.chunks.count) (\(chunk.count) bytes)")
+            
+            // Move to the next chunk
+            currentChunkIndex += 1
+            
+            // If we've sent all chunks, complete the transfer
+            if currentChunkIndex >= currentOp.chunks.count {
+                completeCurrentTransfer()
+            } else {
+                // Continue sending after a small delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
+                    self?.sendNextChunk()
+                }
+            }
+        } else {
+            // If not ready, wait for the peripheral to notify us
+            print("Peripheral not ready for write without response, waiting...")
+            // We'll continue in the peripheralIsReadyToSendWriteWithoutResponse delegate method
+        }
+    }
+    
+    // New method to complete the current transfer and report stats
+    private func completeCurrentTransfer() {
+        guard let currentOp = currentWriteOperation else { return }
+        
+        let elapsedTime = Date().timeIntervalSince(currentOp.startTime) // in seconds
+        let throughput = Double(currentOp.totalBytes) / elapsedTime // bytes per second
+        
+        print("Message sent: Total bytes: \(currentOp.totalBytes)")
+        print(String(format: "Time required: %.3f seconds", elapsedTime))
+        print(String(format: "Throughput: %.2f bytes/second", throughput))
+        
+        // Reset the current operation
+        currentWriteOperation = nil
+        currentChunkIndex = 0
     }
     
     // MARK: - Connection Management
@@ -623,6 +679,13 @@ extension BLEManager: CBPeripheralDelegate {
             let charName = characteristic.uuid == wakeupCharUUID ? "wakeup" : "data"
             print("Successfully wrote to \(charName) characteristic")
         }
+    }
+    
+    // Add this delegate method to your CBPeripheralDelegate extension
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        // Called when the peripheral is ready to receive more data
+        print("Peripheral is ready to receive more data")
+        sendNextChunk()
     }
 }
 

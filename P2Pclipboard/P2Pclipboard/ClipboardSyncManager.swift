@@ -61,10 +61,42 @@ class ClipboardSyncManager: ObservableObject {
         }
     }
     
+    @MainActor
+    func resetAllData() {
+        // First stop all services to close connections
+        stopServices()
+        
+        // Reset all the connection states
+        isNetworkConnected = false
+        isBleConnected = false
+        connectionStatus = "Disconnected"
+        
+        // Clear any received content
+        lastReceivedContent = ""
+        
+        // Reset clipboard monitoring states
+        lastLocalClipboardContent = ""
+        ignoreNextClipboardChange = false
+        ignoreNextIncomingMessage = false
+        
+        // Reset BLE manager
+        bleManager.resetDiscoveredDevices()
+        
+        // Reset the MDNS browser (clear cached servers)
+        mdnsBrowser.stopBrowsing()
+        
+        // Reset pasteboard change count to avoid false triggers
+        #if os(macOS)
+        lastPasteboardChangeCount = NSPasteboard.general.changeCount
+        #endif
+        
+        print("All connections and cached data have been reset")
+    }
+    
     func stopServices() {
         print("Stopping clipboard sync services...")
-        mdnsBrowser.stopBrowsing()
-        //bleManager.stopScanning()
+        //mdnsBrowser.stopBrowsing()
+        bleManager.stopScanning()
         
         isNetworkConnected = false
         isBleConnected = false
@@ -207,15 +239,18 @@ class ClipboardSyncManager: ObservableObject {
         let currentChangeCount = NSPasteboard.general.changeCount
         if currentChangeCount != lastPasteboardChangeCount {
             
+            if(!ignoreNextClipboardChange){
+                // First check for images
+                if imageHandler.hasImage() {
+                    handleClipboardImageChange()
+                }
+                // Then check for text
+                else if let currentContent = getClipboardText() {
+                    handleClipboardTextChange(currentContent)
+                }
+            }
+            ignoreNextClipboardChange = false
             lastPasteboardChangeCount = currentChangeCount
-            // First check for images
-            if imageHandler.hasImage() {
-                handleClipboardImageChange()
-            }
-            // Then check for text
-            else if let currentContent = getClipboardText() {
-                handleClipboardTextChange(currentContent)
-            }
         }
     }
     

@@ -2,156 +2,158 @@ import SwiftUI
 import CoreBluetooth
 import CryptoKit
 
+enum AuthOption {
+    case none, generateKey, connectKey
+}
+
 struct ContentView: View {
     @ObservedObject private var clipboardSyncManager = ClipboardSyncManager.shared
     
-    // Store the password securely in the system
+    // Credentials stored securely using AppStorage
     @AppStorage("syncPassword") private var syncPassword: String = ""
     @AppStorage("userName") private var userName: String = ""
     
-    // State for UI control
-    @State private var isPasswordSheetShown = false
-    @State private var tempPassword = ""
-    @State private var tempUserName = ""
+    // Local state for authentication flow
+    @State private var authOption: AuthOption = .none
+    @State private var generatedKey: String = "" // Example key; typically generate dynamically
+    @State private var otherDeviceKey: String = ""
+    @State private var password: String = ""
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                // Status section
-                GroupBox(label: Text("Connection Status").font(.headline)) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        // Show connection status
-                        HStack {
-                            Text("Status:")
-                            Spacer()
-                            HStack {
-                                Circle()
-                                    .fill(connectionColor)
-                                    .frame(width: 10, height: 10)
-                                Text(clipboardSyncManager.connectionStatus)
+            VStack(spacing: 30) {
+                if syncPassword.isEmpty || userName.isEmpty {
+                    // If credentials haven't been set or have been reset
+                    if authOption == .none {
+                        // Show two choices: "Generate Key" and "Connect to other device"
+                        Spacer()
+                        VStack(spacing: 20) {
+                            Button(action: {
+                                authOption = .generateKey
+                                generatedKey = KeyGenerator.generateFormattedKey()
+                            }) {
+                                Text("Generate Key")
+                                    .font(.largeTitle)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical  )
+                                    .background(Color.blue.opacity(0.8))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(10)
+                            }
+                            
+                            Button(action: {
+                                authOption = .connectKey
+                            }) {
+                                Text("Connect to other device")
+                                    .font(.largeTitle)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.green.opacity(0.8))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(10)
                             }
                         }
-                        
-                        // Network status
-                        HStack {
-                            Text("Network:")
-                            Spacer()
-                            Text(clipboardSyncManager.isNetworkConnected ? "Connected" : "Disconnected")
-                                .foregroundColor(clipboardSyncManager.isNetworkConnected ? .green : .red)
-                        }
-                        
-                        // BLE status
-                        HStack {
-                            Text("Bluetooth:")
-                            Spacer()
-                            Text(clipboardSyncManager.isBleConnected ? "Connected" : "Disconnected")
-                                .foregroundColor(clipboardSyncManager.isBleConnected ? .green : .red)
-                        }
-                        
-                        if !userName.isEmpty {
-                            HStack {
-                                Text("User Name:")
-                                Spacer()
-                                Text(userName)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 5)
-                }
-                .padding(.horizontal)
-                
-                // Last received content
-                if !clipboardSyncManager.lastReceivedContent.isEmpty {
-                    GroupBox(label: Text("Last Received Content").font(.headline)) {
-                        ScrollView {
-                            Text(clipboardSyncManager.lastReceivedContent)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(5)
-                        }
-                        .frame(height: 100)
-                    }
-                    .padding(.horizontal)
-                }
-                
-                // Action buttons
-                GroupBox {
-                    VStack(spacing: 15) {
-                        // Connection control button
-                        Button(action: {
-                            if isConnected {
-                                clipboardSyncManager.stopServices()
-                            } else {
+                        .padding(.horizontal)
+                        .multilineTextAlignment(.center)
+                    } else if authOption == .generateKey {
+                        // User chose "Generate Key"
+                        Spacer()
+                        VStack(spacing: 20) {
+                            // Display generated key in bold, large letters
+                            Text(generatedKey)
+                                .font(.system(size: 36, weight: .bold))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            // Instructional subtext
+                            Text("Copy this key to other devices to connect")
+                                .font(.subheadline)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            // Password field (big and centered)
+                            TextField("Input the same password on all devices", text: $password)
+                                .font(.system(size: 24))
+                                .padding(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                                .background(Color(.gray))
+                                .cornerRadius(8)
+                                .frame(maxWidth: .infinity)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            // Continue button to save password and start the services
+                            Button(action: {
+                                syncPassword = password
+                                userName = generatedKey  // Example: You might want to assign a different value
                                 clipboardSyncManager.startServices()
+                                authOption = .none
+                            }) {
+                                Text("Continue")
+                                    .font(.title2)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(10)
                             }
-                        }) {
-                            HStack {
-                                Image(systemName: isConnected ? "network.slash" : "network")
-                                Text(isConnected ? "Disconnect" : "Connect")
-                            }
-                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(isConnected ? .red : .blue)
-                        .disabled(syncPassword.isEmpty)
+                        .padding()
                         
-                        // Setup/update password button
-                        Button(action: {
-                            tempPassword = syncPassword
-                            tempUserName = userName
-                            isPasswordSheetShown = true
-                        }) {
-                            HStack {
-                                Image(systemName: "key")
-                                Text(syncPassword.isEmpty ? "Set Password & Name" : "Update Password & Name")
+                        Spacer()
+                    } else if authOption == .connectKey {
+                        // User chose "Connect to other device"
+                        VStack(spacing: 20) {
+                            // Field to input the key from another device
+                        
+                            Spacer()
+                            
+                            TextField("Input key of other device", text: $otherDeviceKey)
+                                .font(.system(size: 24))
+                                .padding(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                                .background(Color(.gray))
+                                .cornerRadius(8)
+                                .frame(maxWidth: .infinity)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            
+                            // Password field (big and centered)
+                            TextField("Input the same password on all devices", text: $password)
+                                .font(.system(size: 24))
+                                .padding(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                                .background(Color(.gray))
+                                .cornerRadius(8)
+                                .frame(maxWidth: .infinity)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            // Button to connect using the provided key and password
+                            Button(action: {
+                                // Save the provided key and password
+                                syncPassword = password
+                                userName = otherDeviceKey   // or store key info separately
+                                clipboardSyncManager.startServices()
+                                authOption = .none
+                            }) {
+                                Text("Connect")
+                                    .font(.title2)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.green)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(10)
                             }
-                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal)
+                            
+                            Spacer()
                         }
-                        .buttonStyle(.bordered)
+                        .padding()
                     }
+                } else {
+                    // If credentials are already set, you can show your regular connected UI.
+                    ConnectedModuleView()
                 }
-                .padding(.horizontal)
-                
                 Spacer()
-            }
-            .navigationTitle("Clipboard Sync")
-            .sheet(isPresented: $isPasswordSheetShown) {
-                PasswordSheetView(
-                    password: $tempPassword,
-                    userName: $tempUserName,
-                    onSave: {
-                        syncPassword = tempPassword
-                        userName = tempUserName
-                        
-                        // If the app is connected, restart services with the new password
-                        if isConnected {
-                            clipboardSyncManager.stopServices()
-                            clipboardSyncManager.startServices()
-                        }
-                    }
-                )
-            }
-            .onAppear {
-                // Auto-start services if we have a password
-                if !syncPassword.isEmpty {
-                    clipboardSyncManager.startServices()
-                }
-            }
-        }
-    }
-    
-    private var isConnected: Bool {
-        return clipboardSyncManager.isNetworkConnected || clipboardSyncManager.isBleConnected
-    }
-    
-    private var connectionColor: Color {
-        
-        if clipboardSyncManager.isNetworkConnected || clipboardSyncManager.isBleConnected {
-            return .green
-        } else if clipboardSyncManager.connectionStatus == "Scanning..." {
-            return .yellow
-        }
-        else {
-            return .red
-        }
+            }.multilineTextAlignment(.center)
     }
 }
