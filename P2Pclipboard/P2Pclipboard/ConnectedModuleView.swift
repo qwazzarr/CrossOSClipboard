@@ -58,6 +58,7 @@ struct ConnectedModuleView: View {
                 syncPassword = ""
                 userName = ""
                 clipboardSyncManager.resetAllData()
+                ClipboardEncryption.clearPassword()
             }) {
                 Text("Change Settings")
                     .font(.headline)

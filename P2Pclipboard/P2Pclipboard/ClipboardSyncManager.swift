@@ -31,6 +31,7 @@ class ClipboardSyncManager: ObservableObject {
     //exists to ignore the first message that receives from either ble or tcp connection, since the behaviour of a server to immidiately send its clipboard content when the connetcion is established
     private var ignoreNextIncomingMessage = false
     
+    
     private var lastPasteboardChangeCount: Int = 0
     private var clipboardCheckTimer: Timer?
     
@@ -51,7 +52,7 @@ class ClipboardSyncManager: ObservableObject {
         bleManager.startScanning()
         
         // Start MDNS browser for TCP connection discovery
-        //mdnsBrowser.startBrowsing()
+        mdnsBrowser.startBrowsing()
         
         connectionStatus = "Scanning..."
         
@@ -59,6 +60,10 @@ class ClipboardSyncManager: ObservableObject {
         if let initialContent = getClipboardContent() {
             lastLocalClipboardContent = initialContent
         }
+    }
+    
+    func setBLEUUID(_ uuid: String) {
+        let uuid = bleManager.setServiceUUID(uuid)
     }
     
     @MainActor
@@ -95,7 +100,7 @@ class ClipboardSyncManager: ObservableObject {
     
     func stopServices() {
         print("Stopping clipboard sync services...")
-        //mdnsBrowser.stopBrowsing()
+        mdnsBrowser.stopBrowsing()
         bleManager.stopScanning()
         
         isNetworkConnected = false
@@ -156,6 +161,7 @@ class ClipboardSyncManager: ObservableObject {
                 print("BLE connection callback: \(connected)")
                 self?.isBleConnected = connected
                 self?.updateConnectionStatus()
+                self?.mdnsBrowser.setAutoClose(true)
             }
         }
         
@@ -255,24 +261,30 @@ class ClipboardSyncManager: ObservableObject {
     }
     
     /// Process a clipboard image change
-     private func handleClipboardImageChange() {
-         print("Clipboard contains image, checking if it's new...")
-         
-         // Get image from clipboard with compression along with original hash
-         if let imageResult = imageHandler.getImageFromClipboard(format: .jpeg,
-                                                                 isCompressed: self.isNetworkConnected || self.mdnsBrowser.hasCachedServer) {
-             let imageData = imageResult.data
-             let originalHash = imageResult.originalHash
-             
-             print("Clipboard image changed, hash: \(originalHash)")
-             
-             // Broadcast image to connected devices
-             broadcastData(imageData, contentType: .jpegImage)
-
-         } else {
-             print("Failed to get image data from clipboard")
-         }
-     }
+    private func handleClipboardImageChange() {
+        print("Clipboard contains image, checking if it's new...")
+        
+        // Determine if we should use higher compression for BLE
+        let useBLECompression = isBleConnected && !isNetworkConnected
+        
+        // Get image from clipboard with compression along with original hash
+        if let imageResult = imageHandler.getImageFromClipboard(
+            format: .jpeg,
+            isCompressed: true,
+            compressionLevel: useBLECompression ? CompressionLevel.extreme : CompressionLevel.low) {
+                
+            let imageData = imageResult.data
+            let originalHash = imageResult.originalHash
+            
+            print("Clipboard image changed, hash: \(originalHash)")
+            print("Image size: \(imageData.count) bytes, using \(useBLECompression ? "high" : "medium") compression")
+            
+            // Broadcast image to connected devices
+            broadcastData(imageData, contentType: .jpegImage)
+        } else {
+            print("Failed to get image data from clipboard")
+        }
+    }
     
     private func handleClipboardTextChange(_ currentContent: String) {
         if currentContent != lastLocalClipboardContent {

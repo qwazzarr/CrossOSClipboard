@@ -8,34 +8,11 @@ import AppKit
 #endif
 
 // Content types for image messages - should match the C++ enum in MessageProtocol.h
-enum ClipboardImageFormat: UInt8 {
-    case png = 3
-    case jpeg = 4
-    
-    var contentType: MessageContentType {
-        return MessageContentType(rawValue: self.rawValue) ?? .plainText
-    }
-    
-    var fileExtension: String {
-        switch self {
-        case .jpeg: return "jpg"
-        case .png: return "png"
-        }
-    }
-    
-    var mimeType: String {
-        switch self {
-        case .jpeg: return "image/jpeg"
-        case .png: return "image/png"
-        }
-    }
-}
 
 // Class to handle clipboard image detection, processing and transfer
 class ClipboardImageHandler {
     // Configuration options
     private let maxImageDimension: CGFloat = 1200
-    private let jpegCompressionQuality: CGFloat = 0.7
     private let maxImageSizeBytes: Int = 1024 * 1024 // 1MB default max size
     
     // For hash generation
@@ -59,7 +36,10 @@ class ClipboardImageHandler {
     ///   - format: The desired output format (JPEG or PNG)
     ///   - isCompressed: Whether to apply resizing and compression
     /// - Returns: A tuple with processed image data and hash of the original image, or nil if no image
-    func getImageFromClipboard(format: ClipboardImageFormat = .jpeg, isCompressed: Bool = true) -> (data: Data, originalHash: Int)? {
+    func getImageFromClipboard(format: ClipboardImageFormat = .jpeg,
+                               isCompressed: Bool = true,
+                               compressionLevel: CompressionLevel = .medium) -> (data: Data, originalHash: Int)? {
+        
         guard let originalImage = getRawClipboardImage() else {
             print("No image found in clipboard")
             return nil
@@ -72,7 +52,7 @@ class ClipboardImageHandler {
         let processedData: Data?
         if isCompressed {
             // Process and compress the image
-            processedData = processImage(originalImage, format: format)
+            processedData = processImage(originalImage, format: format,compressionLevel: compressionLevel)
         } else {
             // Simple conversion without resizing
             processedData = convertImageFormat(originalImage, format: format)
@@ -258,15 +238,17 @@ class ClipboardImageHandler {
     }
     
     /// Process an image: resize if needed and convert to the desired format with compression
-    private func processImage(_ image: PlatformImage, format: ClipboardImageFormat) -> Data? {
+    func processImage(_ image: PlatformImage, format: ClipboardImageFormat, compressionLevel: CompressionLevel = .medium) -> Data? {
         // First resize the image if needed
-        let resizedImage = resizeImageIfNeeded(image)
+        let maxDim = compressionLevel.maxDimension
+        let resizedImage = resizeImageIfNeeded(image, maxDimension:maxDim)
+        
         
         // Then convert to the requested format with compression for JPEG
 #if os(iOS)
         switch format {
         case .jpeg:
-            return resizedImage.jpegData(compressionQuality: jpegCompressionQuality)
+            return resizedImage.jpegData(compressionQuality: compressionLevel.jpegQuality)
         case .png:
             return resizedImage.pngData()
         }
@@ -279,7 +261,7 @@ class ClipboardImageHandler {
         
         switch format {
         case .jpeg:
-            return bitmapRep.representation(using: .jpeg, properties: [.compressionFactor: jpegCompressionQuality])
+            return bitmapRep.representation(using: .jpeg, properties: [.compressionFactor: compressionLevel.jpegQuality])
         case .png:
             return bitmapRep.representation(using: .png, properties: [:])
         }
@@ -289,34 +271,37 @@ class ClipboardImageHandler {
     }
     
     /// Resize the image if it exceeds the maximum dimensions
-    private func resizeImageIfNeeded(_ image: PlatformImage) -> PlatformImage {
+    private func resizeImageIfNeeded(_ image: PlatformImage, maxDimension: CGFloat? = nil) -> PlatformImage {
         let size = getImageSize(image)
         
+        // Use provided maxDimension or fall back to default
+        let targetDimension = maxDimension ?? maxImageDimension
+        
         // Check if resize is needed
-        if size.width <= maxImageDimension && size.height <= maxImageDimension {
+        if size.width <= targetDimension && size.height <= targetDimension {
             return image
         }
         
         // Calculate new dimensions maintaining aspect ratio
         var newSize: CGSize
         if size.width > size.height {
-            let newWidth = maxImageDimension
+            let newWidth = targetDimension
             let newHeight = size.height * (newWidth / size.width)
             newSize = CGSize(width: newWidth, height: newHeight)
         } else {
-            let newHeight = maxImageDimension
+            let newHeight = targetDimension
             let newWidth = size.width * (newHeight / size.height)
             newSize = CGSize(width: newWidth, height: newHeight)
         }
         
         // Perform resize
-#if os(iOS)
+        #if os(iOS)
         UIGraphicsBeginImageContextWithOptions(newSize, false, 0.0)
         image.draw(in: CGRect(origin: .zero, size: newSize))
         let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         return resizedImage ?? image
-#elseif os(macOS)
+        #elseif os(macOS)
         let resizedImage = NSImage(size: newSize)
         resizedImage.lockFocus()
         image.draw(in: CGRect(origin: .zero, size: newSize),
@@ -325,9 +310,9 @@ class ClipboardImageHandler {
                    fraction: 1.0)
         resizedImage.unlockFocus()
         return resizedImage
-#else
+        #else
         return image
-#endif
+        #endif
     }
     
     /// Get the size of an image

@@ -19,6 +19,8 @@ struct ContentView: View {
     @State private var otherDeviceKey: String = ""
     @State private var password: String = ""
     
+    
+    
     var body: some View {
             VStack(spacing: 30) {
                 if syncPassword.isEmpty || userName.isEmpty {
@@ -84,6 +86,9 @@ struct ContentView: View {
                             Button(action: {
                                 syncPassword = password
                                 userName = generatedKey  // Example: You might want to assign a different value
+                                ClipboardSyncManager.shared.setBLEUUID(userName)
+                                
+                                ClipboardEncryption.setPassword(password)
                                 clipboardSyncManager.startServices()
                                 authOption = .none
                             }) {
@@ -132,6 +137,10 @@ struct ContentView: View {
                                 // Save the provided key and password
                                 syncPassword = password
                                 userName = otherDeviceKey   // or store key info separately
+                                
+                                ClipboardSyncManager.shared.setBLEUUID(userName)
+                                ClipboardEncryption.setPassword(password)
+                                
                                 clipboardSyncManager.startServices()
                                 authOption = .none
                             }) {
@@ -155,5 +164,13 @@ struct ContentView: View {
                 }
                 Spacer()
             }.multilineTextAlignment(.center)
+            .onAppear {
+                // Set encryption password on app launch if credentials exist
+                if !syncPassword.isEmpty && !ClipboardEncryption.isPasswordSet {
+                    ClipboardEncryption.setPassword(syncPassword)
+                }
+                
+                ClipboardSyncManager.shared.setBLEUUID(userName)
+            }
     }
 }

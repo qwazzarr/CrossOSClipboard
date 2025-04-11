@@ -53,7 +53,6 @@ class MDNSBrowser: ObservableObject {
     }
     
     // MARK: - Service Discovery and Connection
-    
     func startBrowsing() {
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = true

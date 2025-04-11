@@ -24,7 +24,7 @@ class BLEManager: NSObject, ObservableObject {
     private var pendingScan = false
     
     // BLE connection constants
-    private let serviceUUID = CBUUID(string: "6C871015-D93C-437B-9F13-9349987E6FB3")
+    private var serviceUUID = CBUUID(string: "6C871015-D93C-437B-9F13-9349987E6FB3")
     private let wakeupCharUUID = CBUUID(string: "84FB7F28-93DA-4A5B-8172-2545B391E2C6")
     private let dataCharUUID = CBUUID(string: "D752C5FB-1A50-4682-B308-593E96CE1E5D")
     
@@ -85,6 +85,20 @@ class BLEManager: NSObject, ObservableObject {
     
     func setMessageCallback(_ callback: @escaping BLEMessageCallback) {
         messageCallback = callback
+    }
+    
+    func setServiceUUID(_ key: String) -> CBUUID {
+        // Convert the key to a UUID string using the deterministic generator
+        let uuid = GenerateUUID.cbuuidFromString(key)
+        
+        // Create a CBUUID from the generated UUID string
+        serviceUUID = uuid
+        
+        print("Service UUID set to: \(serviceUUID.uuidString) (from key: \(key))")
+        
+        // If already scanning/advertising, restart to use the new UUID
+        
+        return serviceUUID
     }
     
     func stopScanning() {
