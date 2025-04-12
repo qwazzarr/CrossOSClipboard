@@ -10,7 +10,7 @@ enum TransportType {
 // MARK: - Protocol Handler
 class MessageProtocol {
     // BLE packet size constraint
-    private static let bleMaxChunkSize = 512
+    private static let bleMaxChunkSize = 519 - headerSize
     
     // Current protocol version
     private static let protocolVersion: UInt16 = 1
@@ -33,13 +33,19 @@ class MessageProtocol {
         // Generate a unique transfer ID for this message
         let transferId = generateTransferId()
         
+        // Encrypt the payload if encryption is set up
+        guard let encryptedPayload = ClipboardEncryption.encrypt(data: payload) else {
+            print("Failed to encrypt payload or encryption not configured")
+            return [] // Return empty array to indicate failure
+        }
+        
         switch transport {
         case .tcp:
             // For TCP, send as one chunk regardless of size
             var chunk = Data()
             
             // Calculate total length of this message (header + payload)
-            let totalLength: UInt32 = UInt32(headerSize + payload.count)
+            let totalLength: UInt32 = UInt32(headerSize + encryptedPayload.count)
             
             // Append headers
             chunk.append(contentsOf: totalLength.bigEndianBytes)   // Now 4 bytes
@@ -50,13 +56,13 @@ class MessageProtocol {
             chunk.append(contentsOf: UInt32(1).bigEndianBytes)     // Total chunks 1
             
             // Append payload
-            chunk.append(payload)
+            chunk.append(encryptedPayload)
         
             return [chunk]
             
         case .ble:
             // For BLE, we need to chunk the data
-            let chunks = chunkedData(data: payload, chunkSize: bleMaxChunkSize)
+            let chunks = chunkedData(data: encryptedPayload, chunkSize: bleMaxChunkSize)
             let totalChunks = chunks.count
             
             // Create a data chunk for each piece
@@ -184,10 +190,15 @@ class MessageProtocol {
             // Clean up the temporary storage
             partialMessages.removeValue(forKey: transferId)
             
+            guard let decryptedPayload = ClipboardEncryption.decrypt(encryptedData: fullPayload) else {
+                print("Failed to decrypt the payload with secret key")
+                return nil// Return empty array to indicate failure
+            }
+            
             print("Ok, we fully reassembled the message packed into \(Int(totalChunks)) chunks")
             
             // Return the reassembled message
-            return Message(contentType: contentType, transferId: transferId, payload: fullPayload)
+            return Message(contentType: contentType, transferId: transferId, payload: decryptedPayload)
         }
         
         print("Waiting for more chunks , \(partialMessages[transferId]?.count ?? 0)/\(Int(totalChunks))")
@@ -198,17 +209,34 @@ class MessageProtocol {
     
     // MARK: - Helper Methods
     
-    /// Splits data into chunks of specified size
+    /// Splits data into chunks of specified size, respecting UTF-8 character boundaries
     private static func chunkedData(data: Data, chunkSize: Int) -> [Data] {
         var chunks: [Data] = []
-        var remainingData = data
+        var position = 0
         
-        while !remainingData.isEmpty {
-            let chunk = remainingData.prefix(chunkSize)
+        while position < data.count {
+            // Calculate the end position for this chunk
+            var endPos = min(position + chunkSize, data.count)
+            
+            // If we're not at the end of the data and the end position might be in the middle of a UTF-8 character
+            if endPos < data.count {
+                // Check if we're in the middle of a UTF-8 multi-byte character
+                // UTF-8 continuation bytes always start with bits 10xxxxxx (so value & 0xC0 == 0x80)
+                while endPos > position && (data[endPos] & 0xC0) == 0x80 {
+                    // Move back to find the start of the character
+                    endPos -= 1
+                }
+            }
+            
+            // Extract the chunk from position to endPos
+            let chunk = data[position..<endPos]
             chunks.append(chunk)
-            remainingData = remainingData.dropFirst(chunk.count)
+            
+            // Move to the next position
+            position = endPos
         }
         
         return chunks
     }
 }
+

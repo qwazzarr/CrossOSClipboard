@@ -4,31 +4,98 @@
 import Foundation
 import CryptoKit
 
-// Module for handling encryption/decryption of clipboard data
+/// Module for handling encryption/decryption of clipboard data
 class ClipboardEncryption {
     
     // Constants for key derivation
-    private static let saltString = "ClipboardSyncSalt"
-    private static let infoString = "ClipboardSyncInfo"
+    // Salt is a fixed value used to add additional entropy to the key derivation
+    // It's typically public and doesn't need to be secret
+    private static let saltString = "P2PClipboardSyncSalt2025"
     
-    // Derive a symmetric key using HKDF from the password and a salt
-    static func deriveSymmetricKey(from password: String) -> SymmetricKey {
+    // Info is additional context for the key derivation
+    // It helps ensure keys derived for different purposes are distinct
+    private static let infoString = "P2PClipboardEncryptionContext"
+    
+    // Internal storage for the derived key
+    private static var symmetricKey: SymmetricKey?
+    
+    /// Set the encryption password for the module
+    /// - Parameter password: The shared secret password
+    /// - Returns: True if password was successfully set
+    @discardableResult
+    static func setPassword(_ password: String) -> Bool {
+        guard !password.isEmpty else {
+            print("Password cannot be empty")
+            return false
+        }
+        
+        // Derive and store the symmetric key
+        symmetricKey = deriveSymmetricKey(from: password)
+        return true
+    }
+    
+    /// Check if a password has been set
+    /// - Returns: True if a password is set
+    static var isPasswordSet: Bool {
+        return symmetricKey != nil
+    }
+    
+    /// Clear the current password
+    static func clearPassword() {
+        symmetricKey = nil
+    }
+    
+    /// Derive a symmetric key using HKDF from the password
+    /// - Parameter password: User-provided shared secret password
+    /// - Returns: A 32-byte cryptographic key
+    private static func deriveSymmetricKey(from password: String) -> SymmetricKey {
         let passwordData = Data(password.utf8)
-        let salt = saltString.data(using: .utf8)! // Use a constant salt
+        let salt = Data(saltString.utf8) // Use a constant salt
+        
+        // HKDF (HMAC-based Key Derivation Function) transforms the password
+        // into a cryptographically strong key using the salt and info string
         let key = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: passwordData),
             salt: salt,
             info: Data(infoString.utf8),
             outputByteCount: 32)
+        
         return key
     }
     
-    // Encrypt a message (string) into Data using AES-GCM
-    static func encrypt(message: String, using key: SymmetricKey) -> Data? {
-        let messageData = Data(message.utf8)
+    /// Encrypt data using the set password
+    /// - Parameter data: Raw data to encrypt
+    /// - Returns: Encrypted data (includes nonce, ciphertext, and authentication tag)
+    static func encrypt(data: Data) -> Data? {
+        guard let key = symmetricKey else {
+            print("Error: No password has been set. Call setPassword() first.")
+            return nil
+        }
+        
+        return encrypt(data: data, using: key)
+    }
+    
+    /// Decrypt data using the set password
+    /// - Parameter encryptedData: Combined data (nonce, ciphertext, tag)
+    /// - Returns: Decrypted original data or nil if decryption fails
+    static func decrypt(encryptedData: Data) -> Data? {
+        guard let key = symmetricKey else {
+            print("Error: No password has been set. Call setPassword() first.")
+            return nil
+        }
+        
+        return decrypt(encryptedData: encryptedData, using: key)
+    }
+    
+    /// Encrypt data using AES-GCM with the provided key
+    /// - Parameters:
+    ///   - data: Raw data to encrypt
+    ///   - key: Symmetric key for encryption
+    /// - Returns: Encrypted data (includes nonce, ciphertext, and authentication tag)
+    private static func encrypt(data: Data, using key: SymmetricKey) -> Data? {
         do {
-            // AES-GCM will generate a random nonce automatically
-            let sealedBox = try AES.GCM.seal(messageData, using: key)
+            // AES-GCM automatically generates a random nonce and authentication tag
+            let sealedBox = try AES.GCM.seal(data, using: key)
             // Return combined data containing nonce, ciphertext, and tag
             return sealedBox.combined
         } catch {
@@ -37,31 +104,19 @@ class ClipboardEncryption {
         }
     }
     
-    // Decrypt Data using AES-GCM and return the original message string
-    static func decrypt(data: Data, using key: SymmetricKey) -> String? {
+    /// Decrypt data using AES-GCM with the provided key
+    /// - Parameters:
+    ///   - encryptedData: Combined data (nonce, ciphertext, tag)
+    ///   - key: Symmetric key for decryption
+    /// - Returns: Decrypted original data or nil if decryption fails
+    private static func decrypt(encryptedData: Data, using key: SymmetricKey) -> Data? {
         do {
-            let sealedBox = try AES.GCM.SealedBox(combined: data)
+            let sealedBox = try AES.GCM.SealedBox(combined: encryptedData)
             let decryptedData = try AES.GCM.open(sealedBox, using: key)
-            return String(data: decryptedData, encoding: .utf8)
+            return decryptedData
         } catch {
             print("Decryption error: \(error)")
             return nil
         }
-    }
-    
-    // Encrypt a message and return it as a Base64 encoded string (for easy transmission)
-    static func encryptToBase64(message: String, using key: SymmetricKey) -> String? {
-        guard let encryptedData = encrypt(message: message, using: key) else {
-            return nil
-        }
-        return encryptedData.base64EncodedString()
-    }
-    
-    // Decrypt a Base64 encoded string
-    static func decryptFromBase64(encoded: String, using key: SymmetricKey) -> String? {
-        guard let data = Data(base64Encoded: encoded) else {
-            return nil
-        }
-        return decrypt(data: data, using: key)
     }
 }
