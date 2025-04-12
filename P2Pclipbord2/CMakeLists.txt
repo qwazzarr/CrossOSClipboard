@@ -13,7 +13,7 @@ add_executable(P2PClipboard
     src/BLEManager.h
     src/BLEPayload.h
     app.rc
- "src/BLEPayload.h" "src/ByteUtils.h" "src/ByteUtils.cpp" "src/MessageProtocol.cpp")
+ "src/BLEPayload.h" "src/ByteUtils.h" "src/ByteUtils.cpp" "src/MessageProtocol.cpp" "src/ClipboardImageHandler.h" "src/ClipboardImageHandler.cpp" "src/ClipboardEncryption.cpp" "src/UUIDGenerator.cpp")
 
 # Include directories
 target_include_directories(P2PClipboard PRIVATE
