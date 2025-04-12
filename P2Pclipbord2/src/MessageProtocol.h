@@ -31,6 +31,9 @@ public:
         std::vector<uint8_t> payload;
 
         std::string getStringPayload() const;
+
+        // Get the raw binary payload
+        const std::vector<uint8_t>& getBinaryPayload() const;
     };
 
     // Encode a message with the specified content type and payload

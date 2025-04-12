@@ -66,12 +66,38 @@ bool ClipboardManager::createHiddenWindow() {
 
     std::cout << "Clipboard monitoring started" << std::endl;
 
-    // Initialize the last clipboard content
-    lastClipboardContent = getClipboardContent();
-    std::cout << "Initial clipboard content: " << lastClipboardContent.substr(0, 100)
-        << (lastClipboardContent.length() > 100 ? "..." : "") << std::endl;
+    // Get initial clipboard content for debug purposes
+    auto [content, contentType] = getClipboardContent();
+
+    // Just print initial content if it's text
+    if (contentType == MessageContentType::PLAIN_TEXT && !content.empty()) {
+        std::string textContent(content.begin(), content.end());
+        std::cout << "Initial clipboard text: " << textContent.substr(0, 100)
+            << (textContent.length() > 100 ? "..." : "") << std::endl;
+    }
+    else if (!content.empty()) {
+        std::cout << "Initial clipboard content: ["
+            << getContentTypeName(contentType) << "], "
+            << content.size() << " bytes" << std::endl;
+    }
+    else {
+        std::cout << "Clipboard is empty" << std::endl;
+    }
 
     return true;
+}
+
+// Helper method to get a string representation of content type
+std::string ClipboardManager::getContentTypeName(MessageContentType type) {
+    switch (type) {
+    case MessageContentType::PLAIN_TEXT: return "Text";
+    case MessageContentType::JPEG_IMAGE: return "JPEG Image";
+    case MessageContentType::PNG_IMAGE: return "PNG Image";
+    case MessageContentType::RTF_TEXT: return "RTF";
+    case MessageContentType::HTML_CONTENT: return "HTML";
+    case MessageContentType::PDF_DOCUMENT: return "PDF";
+    default: return "Unknown";
+    }
 }
 
 bool ClipboardManager::setClipboardContent(const std::string& content, bool fromRemote) {
@@ -135,12 +161,10 @@ bool ClipboardManager::setClipboardContent(const std::string& content, bool from
         ignoreNextChange.store(true);
     }
 
-    // Update our cached value
-    lastClipboardContent = content;
     return true;
 }
 
-std::string ClipboardManager::getClipboardContent() {
+std::string ClipboardManager::getClipboardText() {
     std::lock_guard<std::mutex> lock(clipboardMutex);
     std::string result;
 
@@ -180,16 +204,62 @@ std::string ClipboardManager::getClipboardContent() {
     return result;
 }
 
+std::pair<std::vector<uint8_t>, MessageContentType> ClipboardManager::getClipboardContent() {
+    std::cout << "entered" << std::endl;
+    // Check for images first
+    if (imageHandler.hasImage()) {
+        auto result = imageHandler.getImageFromClipboard();
+        if (result.success) {
+            return { result.data, MessageContentType::JPEG_IMAGE };
+        }
+    }
+    // Then check for text
+    std::string text = getClipboardText();
+    if (!text.empty()) {
+        std::vector<uint8_t> data(text.begin(), text.end());
+        return { data, MessageContentType::PLAIN_TEXT };
+    }
+
+    return { {}, MessageContentType::PLAIN_TEXT };
+}
+
 void ClipboardManager::setClipboardUpdateCallback(ClipboardUpdateCallback callback) {
     updateCallback = callback;
 }
 
-void ClipboardManager::processRemoteMessage(const std::string& message) {
-    std::cout << "Entered processRemoteMessage: " << message << std::endl;
-    // Handle clipboard data from client
-    bool result = setClipboardContent(message, true);
-    std::cout << "SetClipboardContent result: " << (result ? "SUCCESS" : "FAILED") << std::endl;
-    /*updateCallback(message);*/
+// Updated method to process remote messages
+void ClipboardManager::processRemoteMessage(const std::vector<uint8_t>& data, MessageContentType contentType) {
+    std::cout << "Processing remote message with content type: " << static_cast<int>(contentType) << std::endl;
+
+    switch (contentType) {
+    case MessageContentType::PLAIN_TEXT: {
+        // Convert binary payload to string
+        std::string textContent(data.begin(), data.end());
+        setClipboardContent(textContent, true);
+        break;
+    }
+
+    case MessageContentType::JPEG_IMAGE:
+    case MessageContentType::PNG_IMAGE: {
+        // For images, use ClipboardImageHandler
+        ClipboardImageFormat format = (contentType == MessageContentType::JPEG_IMAGE) ?
+            ClipboardImageFormat::JPEG : ClipboardImageFormat::PNG;
+
+        bool result = imageHandler.setClipboardImage(data, format);
+        std::cout << "Set clipboard image result: " << (result ? "SUCCESS" : "FAILED") << std::endl;
+
+        // Mark that we should ignore the next clipboard update
+        if (result) {
+            ignoreNextChange.store(true);
+            lastContentHash = std::hash<std::string>{}(std::string(data.begin(), data.end()));
+        }
+        break;
+    }
+
+    default:
+        std::cerr << "Unsupported content type: " << static_cast<int>(contentType) << std::endl;
+        break;
+    }
 }
 
 bool ClipboardManager::shouldIgnoreNextChange() {
@@ -200,27 +270,32 @@ void ClipboardManager::resetIgnoreFlag() {
     ignoreNextChange.store(false);
 }
 
+// Update the window procedure for content type handling
 LRESULT CALLBACK ClipboardManager::ClipboardWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_CLIPBOARDUPDATE && instance) {
         std::cout << "Clipboard change detected!" << std::endl;
 
-        //// Check if we should ignore this change
-        //if (instance->shouldIgnoreNextChange()) {
-        //    std::cout << "Ignoring clipboard change (from remote update)" << std::endl;
-        //    instance->resetIgnoreFlag();
-        //    return 0;
-        //}cupsize
+        if (instance->shouldIgnoreNextChange()) {
+            std::cout << "Ignoring clipboard change (from remote update)" << std::endl;
+            instance->resetIgnoreFlag();
+            return 0;
+        }
+        auto [data, contentType] = instance->getClipboardContent();
+        if (!data.empty()) {
+            // Calculate a hash for change detection
+            size_t contentHash = std::hash<std::string>{}(std::string(data.begin(), data.end()));
 
-        std::string currentContent = instance->getClipboardContent();
-        if (!currentContent.empty() && currentContent != instance->lastClipboardContent) {
-            std::cout << "Clipboard content changed. New length: " << currentContent.length() << std::endl;
+            if (contentHash != instance->lastContentHash) {
+                std::cout << "Clipboard content changed. Type: " << static_cast<int>(contentType)
+                    << ", Size: " << data.size() << " bytes" << std::endl;
 
-            // Update our cached content
-            instance->lastClipboardContent = currentContent;
+                // Update our cached hash
+                instance->lastContentHash = contentHash;
 
-            // Notify callback if registered
-            if (instance->updateCallback) {
-                instance->updateCallback(currentContent);
+                // Notify callback if registeredNew length
+                if (instance->updateCallback) {
+                    instance->updateCallback(data, contentType);
+                }
             }
         }
         return 0;

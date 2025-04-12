@@ -1,5 +1,6 @@
 #include "MessageProtocol.h"
 #include "ByteUtils.h"
+#include "ClipboardEncryption.h"
 #include <chrono>
 #include <algorithm>
 #include <string>
@@ -18,6 +19,11 @@ std::string MessageProtocol::Message::getStringPayload() const {
 
     return std::string(payload.begin(), payload.end());
 }
+// Helper method to get binary payload
+const std::vector<uint8_t>& MessageProtocol::Message::getBinaryPayload() const {
+    return payload;
+}
+
 
 uint32_t MessageProtocol::generateTransferId() {
     uint32_t id = nextTransferId;
@@ -32,6 +38,13 @@ std::vector<std::vector<uint8_t>> MessageProtocol::encodeMessage(
 ) {
     // Generate a unique transfer ID for this message
     uint32_t transferId = generateTransferId();
+
+    // Encrypt the payload
+    std::vector<uint8_t> encryptedPayload = ClipboardEncryption::encrypt(payload);
+    if (encryptedPayload.empty()) {
+        std::cerr << "Failed to encrypt payload or encryption not configured" << std::endl;
+        return {}; // Return empty vector to indicate failure
+    }
 
     if (transport == TransportType::TCP) {
         // For TCP, send as one chunk regardless of size
@@ -158,6 +171,16 @@ std::shared_ptr<MessageProtocol::Message> MessageProtocol::decodeData(
         message->contentType = contentType;
         message->transferId = transferId;
         message->payload = std::move(payload);
+        // Decrypt the payload
+        std::vector<uint8_t> decryptedPayload = ClipboardEncryption::decrypt(message->payload);
+        if (!decryptedPayload.empty()) {
+            // Replace the encrypted payload with the decrypted one
+            message->payload = std::move(decryptedPayload);
+        }
+        else {
+            std::cerr << "Failed to decrypt message payload" << std::endl;
+            return nullptr;
+        }
         return message;
     }
 
@@ -202,6 +225,19 @@ std::shared_ptr<MessageProtocol::Message> MessageProtocol::decodeData(
         message->transferId = transferId;
         message->payload = std::move(fullPayload);
 
+        // Decrypt the payload
+        std::vector<uint8_t> decryptedPayload = ClipboardEncryption::decrypt(message->payload);
+        if (!decryptedPayload.empty()) {
+            // Replace the encrypted payload with the decrypted one
+            message->payload = std::move(decryptedPayload);
+        }
+        else {
+            std::cerr << "Failed to decrypt message payload" << std::endl;
+            // You could either return nullptr to indicate failure
+            // or continue with the encrypted payload (not recommended)
+            return nullptr;
+        }
+
         partialMessages.erase(transferId);
         partialMessageTimestamps.erase(transferId);
 
@@ -242,7 +278,7 @@ std::vector<std::vector<uint8_t>> MessageProtocol::chunkedData(
 
     while (position < data.size()) {
         // Calculate the end position for this chunk
-        size_t endPos = std::min(position + static_cast<size_t>(chunkSize), data.size());
+        size_t endPos = (std::min)(position + static_cast<size_t>(chunkSize), data.size());
 
         // If we're not at the end of the data and might be in the middle of a UTF-8 character
         if (endPos < data.size()) {

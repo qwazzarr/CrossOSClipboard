@@ -31,7 +31,7 @@ using namespace Windows::Storage::Streams;
 
 // Callbacks
 using BLEConnectionCallback = std::function<void(const std::string&, bool)>;
-using BLEDataReceivedCallback = std::function<void(const std::string&)>;
+using BLEDataReceivedCallback = std::function<void(const std::vector<uint8_t>& data, MessageContentType contentType)>;
 
 class BLEManager {
 public:
@@ -47,6 +47,8 @@ public:
     // Stop advertising
     void stopAdvertising();
 
+    static bool setServiceUUID(const std::string& key);
+
     // Send a wakeup notification to all subscribed clients and wait for response
     enum class ClientResponseType {
         NONE,       // No response received yet
@@ -57,7 +59,7 @@ public:
     ClientResponseType sendWakeupAndWaitForResponse(int timeoutMilliseconds = 1000);
 
     // Send clipboard data via GATT characteristic
-    bool sendClipboardData(const std::string& data);
+    bool sendMessage(const std::vector<uint8_t>& data, MessageContentType contentType);
 
     // Set connection callback
     void setConnectionCallback(BLEConnectionCallback callback);
@@ -65,15 +67,22 @@ public:
     // Set data received callback
     void setDataReceivedCallback(BLEDataReceivedCallback callback);
 
+
+    // Initialize with default UUID at declaration
+
+
 private:
+    
     // Service and characteristic UUIDs
-    const GUID SERVICE_UUID = { 0x6c871015, 0xd93c, 0x437b, { 0x9f, 0x13, 0x93, 0x49, 0x98, 0x7e, 0x6f, 0xb3 } };
+    static inline GUID SERVICE_UUID = { 0x6c871015, 0xd93c, 0x437b, { 0x9f, 0x13, 0x93, 0x49, 0x98, 0x7e, 0x6f, 0xb3 } };
 
     // WakeUp characteristic UUID
     const GUID WAKEUP_CHAR_UUID = { 0x84fb7f28, 0x93da, 0x4a5b, { 0x81, 0x72, 0x25, 0x45, 0xb3, 0x91, 0xe2, 0xc6 } };
 
     // Data characteristic UUID (for clipboard data)
     const GUID DATA_CHAR_UUID = { 0xd752c5fb, 0x1a50, 0x4682, { 0xb3, 0x08, 0x59, 0x3e, 0x96, 0xce, 0x1e, 0x5d } };
+
+    static GUID BLEManager::convertStringToGUID(const std::string& uuidString);
 
     // Device information
     std::string deviceName;

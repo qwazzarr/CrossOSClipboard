@@ -349,7 +349,6 @@ void NetworkManager::handleClient(SOCKET clientSocket, const std::string& client
         if (message) {
             // Notify callback with the received message
 
-            std::cout << "Tried decoding message!" << std::endl;
             if (messageCallback) {
                 messageCallback(message->contentType, message->payload);
             }

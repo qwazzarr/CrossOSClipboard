@@ -1,9 +1,14 @@
 #include "BLEManager.h"
 #include "BLEPayload.h"
+#include "UUIDGenerator.h"
 #include <iostream>
 #include <algorithm>
 #include <sstream>
 #include <unordered_set>
+#include <queue>
+#include <iomanip>
+#include <vector>
+#include <chrono>
 
 // Generate a simple device ID based on machine name and timestamp
 std::string GenerateDeviceId() {
@@ -32,6 +37,43 @@ BLEManager::~BLEManager() {
 
     // Uninitialize WinRT
     winrt::uninit_apartment();
+}
+
+bool BLEManager::setServiceUUID(const std::string& key) {
+    // Generate a UUID from the key
+    std::string uuidString = UUIDGenerator::uuidFromString(key);
+
+    // Set the service UUID
+    SERVICE_UUID = convertStringToGUID(uuidString);
+
+    std::cout << "Service UUID set to: " << uuidString << " (from key: " << key << ")" << std::endl;
+
+    return true;
+}
+
+// Helper function to convert string UUID to GUID
+GUID BLEManager::convertStringToGUID(const std::string& uuidString) {
+    GUID guid;
+    unsigned long p0;
+    unsigned int p1, p2, p3, p4, p5, p6, p7, p8, p9, p10;
+
+    sscanf_s(uuidString.c_str(),
+        "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        &p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7, &p8, &p9, &p10);
+
+    guid.Data1 = p0;
+    guid.Data2 = p1;
+    guid.Data3 = p2;
+    guid.Data4[0] = p3;
+    guid.Data4[1] = p4;
+    guid.Data4[2] = p5;
+    guid.Data4[3] = p6;
+    guid.Data4[4] = p7;
+    guid.Data4[5] = p8;
+    guid.Data4[6] = p9;
+    guid.Data4[7] = p10;
+
+    return guid;
 }
 
 bool BLEManager::initialize() {
@@ -468,31 +510,57 @@ void BLEManager::handleCharacteristicWriteRequested(GattLocalCharacteristic send
                     }
                     else {
                         // Normal data processing for DATA characteristic
-                        // Try to decode using MessageProtocol
-                        auto message = MessageProtocol::decodeData(rawData);
+                        // Use a mutex to protect concurrent access during message processing
+                        static std::mutex decodeMutex;
+                        std::lock_guard<std::mutex> lock(decodeMutex);
 
-                        if (message) {
-                            // If message is complete, process it
-                            std::cout << "Decoded complete message from GATT write" << std::endl;
+                        try {
+                            // Try to decode using MessageProtocol
+                            auto message = MessageProtocol::decodeData(rawData);
+                            if (message) {
+                                // If message is complete, process it
+                                std::cout << "Decoded complete message from GATT write, content type: "
+                                    << static_cast<int>(message->contentType) << std::endl;
 
-                            if (message->contentType == MessageContentType::PLAIN_TEXT) {
-                                // For text data, convert to string
-                                std::string text = message->getStringPayload();
+                                // Get the binary payload
+                                const std::vector<uint8_t>& payload = message->getBinaryPayload();
 
-                                // Process the received text data
-                                if (dataCallback && !text.empty()) {
-                                    dataCallback(text);
+                                // Make a local copy of the callback to avoid race conditions
+                                auto callbackCopy = dataCallback;
+
+                                // Call the callback with both payload and content type
+                                if (callbackCopy && !payload.empty()) {
+                                    // Consider using a separate thread for callback if it might be long-running
+                                    // This prevents blocking the BLE message handler
+                                    std::thread([callbackCopy, payload, contentType = message->contentType]() {
+                                        try {
+                                            callbackCopy(payload, contentType);
+                                        }
+                                        catch (const std::exception& e) {
+                                            std::cerr << "Exception in data callback: " << e.what() << std::endl;
+                                        }
+                                        catch (...) {
+                                            std::cerr << "Unknown exception in data callback" << std::endl;
+                                        }
+                                        }).detach();
+
+                                    std::cout << "Dispatched callback for received message" << std::endl;
+                                }
+                                else {
+                                    std::cout << "No callback registered or empty payload" << std::endl;
                                 }
                             }
                             else {
-                                std::cout << "Received non-text data via GATT, content type: "
-                                    << static_cast<int>(message->contentType) << std::endl;
+                                std::cout << "Partial message received, message protocol needs more data" << std::endl;
+                                // Note: For partial messages, we would need a more complex buffer management system
+                                // This is a limitation of the GATT approach compared to streaming protocols
                             }
                         }
-                        else {
-                            std::cout << "Partial message received, message protocol needs more data" << std::endl;
-                            // Note: For partial messages, we would need a more complex buffer management system
-                            // This is a limitation of the GATT approach compared to streaming protocols
+                        catch (const std::exception& e) {
+                            std::cerr << "Exception during message decoding: " << e.what() << std::endl;
+                        }
+                        catch (...) {
+                            std::cerr << "Unknown exception during message decoding" << std::endl;
                         }
                     }
                 }
@@ -655,49 +723,155 @@ bool BLEManager::testEncodeDecodeMessage(const std::string& data) {
     }
 }
 
-bool BLEManager::sendClipboardData(const std::string& data) {
+bool BLEManager::sendMessage(const std::vector<uint8_t>& data, MessageContentType contentType) {
     try {
-        std::cout << "Sending clipboard data via GATT characteristic, length: " << data.length() << std::endl;
-        // Store the clipboard content for sending to new connections
-        clipboardContent = data;
+        std::cout << "Sending data via GATT characteristic, type: " << static_cast<int>(contentType)
+            << ", length: " << data.size() << " bytes" << std::endl;
+
+        // Store the content for sending to new connections if it's text
+        if (contentType == MessageContentType::PLAIN_TEXT) {
+            clipboardContent = std::string(data.begin(), data.end());
+        }
+
         // Check if we have a valid data characteristic reference
         if (!dataCharacteristicRef) {
             std::cerr << "No data characteristic available (reference is null)" << std::endl;
             return false;
         }
-        // Convert string to vector of bytes
-        std::vector<uint8_t> payload(data.begin(), data.end());
 
-        // Encode using MessageProtocol
-        auto encodedChunks = MessageProtocol::encodeMessage(MessageContentType::PLAIN_TEXT, payload, TransportType::BLE);
+        // Client capability check - only proceed if hasSubscribedClients is true
+        if (!hasSubscribedClients) {
+            std::cerr << "No clients subscribed to receive notifications" << std::endl;
+            return false;
+        }
+
+        // Encode using MessageProtocol - data is already a vector<uint8_t>
+        auto encodedChunks = MessageProtocol::encodeMessage(contentType, data, TransportType::BLE);
         if (encodedChunks.empty()) {
             std::cerr << "Failed to encode message" << std::endl;
             return false;
         }
 
-        // Test encoding/decoding before sending
-        testEncodeDecodeMessage(data);
-
         std::cout << "Encoded into " << encodedChunks.size() << " chunks for BLE transmission" << std::endl;
+
+        // Timer variables
+        auto startTime = std::chrono::high_resolution_clock::now();
+        double bytesPerSecond = 0;
+        size_t totalBytesSent = 0;
+        int delayBetweenChunks = 20; // Default delay in ms
+
+        // Flow control - store pending operations
+        const int MAX_PENDING_OPS = 3; // Maximum number of pending operations
+        std::vector<winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Foundation::Collections::IVectorView<winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattClientNotificationResult>>> pendingOps;
+        pendingOps.reserve(MAX_PENDING_OPS);
+
         // Send each chunk as a separate notification/write
         for (size_t i = 0; i < encodedChunks.size(); i++) {
             // Create a buffer with the chunk data
             auto writer = DataWriter();
             writer.WriteBytes(encodedChunks[i]);
             auto buffer = writer.DetachBuffer();
+
+            // Wait if we've reached max pending operations
+            while (pendingOps.size() >= MAX_PENDING_OPS) {
+                std::cout << "Flow control: waiting for pending operations to complete..." << std::endl;
+
+                // Check all pending operations
+                for (auto it = pendingOps.begin(); it != pendingOps.end(); ) {
+                    auto status = it->Status();
+
+                    if (status == winrt::Windows::Foundation::AsyncStatus::Completed ||
+                        status == winrt::Windows::Foundation::AsyncStatus::Error ||
+                        status == winrt::Windows::Foundation::AsyncStatus::Canceled) {
+
+                        // Operation completed (success or failure)
+                        if (status == winrt::Windows::Foundation::AsyncStatus::Completed) {
+                            auto results = it->GetResults();
+                            bool allSuccess = true;
+
+                            // Check all notification results
+                            for (auto result : results) {
+                                if (result.Status() != GattCommunicationStatus::Success) {
+                                    allSuccess = false;
+                                    std::cerr << "Notification failed for client" << std::endl;
+                                    break;
+                                }
+                            }
+
+                            if (!allSuccess) {
+                                return false;
+                            }
+                        }
+                        else {
+                            std::cerr << "Async operation failed with status: " << static_cast<int>(status) << std::endl;
+                            return false;
+                        }
+
+                        // Remove this operation from pending list
+                        it = pendingOps.erase(it);
+                    }
+                    else {
+                        ++it;
+                    }
+                }
+
+                // If we still have max pending ops, wait a bit
+                if (pendingOps.size() >= MAX_PENDING_OPS) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+            }
+
             try {
                 // Send the notification
                 auto asyncOp = dataCharacteristicRef->NotifyValueAsync(buffer);
-                // Wait for it to complete without blocking indefinitely
-                auto status = asyncOp.wait_for(std::chrono::seconds(1));
-                if (status != winrt::Windows::Foundation::AsyncStatus::Completed) {
-                    std::cerr << "Chunk " << (i + 1) << "/" << encodedChunks.size() << " send operation failed or timed out" << std::endl;
+
+                // Add to pending operations list
+                pendingOps.push_back(asyncOp);
+
+                // Update metrics
+                totalBytesSent += encodedChunks[i].size();
+
+                // Log progress
+                std::cout << "Sent chunk " << (i + 1) << "/" << encodedChunks.size()
+                    << " (" << encodedChunks[i].size() << " bytes)"
+                    << " - " << pendingOps.size() << " pending operations"
+                    << std::endl;
+
+                // Calculate transfer speed periodically
+                if (i > 0 && i % 5 == 0) {
+                    auto currentTime = std::chrono::high_resolution_clock::now();
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        currentTime - startTime).count();
+
+                    if (elapsed > 0) {
+                        bytesPerSecond = totalBytesSent * 1000.0 / elapsed;
+
+                        // Adjust delay based on transfer speed
+                        if (bytesPerSecond < 5000) {
+                            delayBetweenChunks = 50; // Slower for poor connections
+                        }
+                        else if (bytesPerSecond > 20000) {
+                            delayBetweenChunks = 1; // Faster for good connections
+                        }
+                        else {
+                            delayBetweenChunks = 20; // Default
+                        }
+
+                        std::cout << "Transfer speed: " << std::fixed << std::setprecision(2)
+                            << bytesPerSecond << " bytes/sec | Delay: " << delayBetweenChunks << "ms"
+                            << std::endl;
+                    }
+                }
+
+                // Check if client is still connected
+                if (!hasSubscribedClients) {
+                    std::cerr << "Client disconnected during transmission" << std::endl;
                     return false;
                 }
-                std::cout << "Sent chunk " << (i + 1) << "/" << encodedChunks.size() << " (" << encodedChunks[i].size() << " bytes)" << std::endl;
-                // Add a small delay between chunks to avoid overwhelming the receiver
+
+                // Add delay between chunks
                 if (i < encodedChunks.size() - 1) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(delayBetweenChunks));
                 }
             }
             catch (const winrt::hresult_error& ex) {
@@ -705,15 +879,86 @@ bool BLEManager::sendClipboardData(const std::string& data) {
                 return false;
             }
         }
-        std::cout << "Clipboard data sent successfully via GATT" << std::endl;
+
+        // Wait for all remaining operations to complete
+        std::cout << "Waiting for " << pendingOps.size() << " remaining operations to complete..." << std::endl;
+
+        const auto waitStartTime = std::chrono::high_resolution_clock::now();
+        const auto waitTimeout = std::chrono::seconds(5); // 5-second timeout for final operations
+
+        while (!pendingOps.empty()) {
+            // Check if we've exceeded the timeout
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            if (currentTime - waitStartTime > waitTimeout) {
+                std::cerr << "Timed out waiting for final operations to complete" << std::endl;
+                break;
+            }
+
+            // Process completed operations
+            for (auto it = pendingOps.begin(); it != pendingOps.end(); ) {
+                auto status = it->Status();
+
+                if (status == winrt::Windows::Foundation::AsyncStatus::Completed ||
+                    status == winrt::Windows::Foundation::AsyncStatus::Error ||
+                    status == winrt::Windows::Foundation::AsyncStatus::Canceled) {
+
+                    if (status == winrt::Windows::Foundation::AsyncStatus::Completed) {
+                        auto results = it->GetResults();
+                        bool allSuccess = true;
+
+                        // Check all notification results
+                        for (auto result : results) {
+                            if (result.Status() != GattCommunicationStatus::Success) {
+                                allSuccess = false;
+                                std::cerr << "Notification failed for client" << std::endl;
+                                break;
+                            }
+                        }
+
+                        if (!allSuccess) {
+                            std::cerr << "Final operation had failed notifications" << std::endl;
+                        }
+                    }
+                    else {
+                        std::cerr << "Final operation failed with status: " << static_cast<int>(status) << std::endl;
+                    }
+
+                    it = pendingOps.erase(it);
+                }
+                else {
+                    ++it;
+                }
+            }
+
+            // Short sleep to prevent CPU spinning
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        // Calculate overall transfer statistics
+        auto endTime = std::chrono::high_resolution_clock::now();
+        auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+
+        // Calculate total bytes sent
+        size_t totalBytes = 0;
+        for (const auto& chunk : encodedChunks) {
+            totalBytes += chunk.size();
+        }
+
+        double overallBytesPerSecond = (totalDuration > 0) ? (totalBytes * 1000.0 / totalDuration) : 0;
+
+        std::cout << "Data sent successfully via GATT | Total: " << totalBytes << " bytes"
+            << " in " << totalDuration << "ms"
+            << " (" << std::fixed << std::setprecision(2) << overallBytesPerSecond << " B/s)"
+            << std::endl;
+
         return true;
     }
     catch (const std::exception& ex) {
-        std::cerr << "Exception in sendClipboardData: " << ex.what() << std::endl;
+        std::cerr << "Exception in sendMessage: " << ex.what() << std::endl;
         return false;
     }
     catch (...) {
-        std::cerr << "Unknown error in sendClipboardData" << std::endl;
+        std::cerr << "Unknown error in sendMessage" << std::endl;
         return false;
     }
 }
