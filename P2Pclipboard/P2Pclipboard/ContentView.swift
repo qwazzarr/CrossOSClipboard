@@ -160,7 +160,10 @@ struct ContentView: View {
                     }
                 } else {
                     // If credentials are already set, you can show your regular connected UI.
-                    ConnectedModuleView()
+                    ConnectedModuleView().onAppear {
+                        // Restart services when view appears with existing credentials
+                        clipboardSyncManager.startServices()
+                    }
                 }
                 Spacer()
             }.multilineTextAlignment(.center)

@@ -10,7 +10,7 @@ enum TransportType {
 // MARK: - Protocol Handler
 class MessageProtocol {
     // BLE packet size constraint
-    private static let bleMaxChunkSize = 519 - headerSize
+    private static let bleMaxChunkSize = 512 - headerSize
     
     // Current protocol version
     private static let protocolVersion: UInt16 = 1

@@ -539,7 +539,7 @@ extension BLEManager: CBCentralManagerDelegate {
         
         // Set up the peripheral delegate and discover services
         peripheral.delegate = self
-        peripheral.discoverServices([serviceUUID])
+        peripheral.discoverServices([serviceUUID])  
         
         // Notify client of connection
         connectionCallback?(true)
@@ -563,6 +563,16 @@ extension BLEManager: CBCentralManagerDelegate {
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             self?.attemptReconnect()
         }
+    }
+    private func checkMTUSizes() {
+        guard let peripheral = connectedDevice else { return }
+        
+        let maxWriteWithoutResponse = peripheral.maximumWriteValueLength(for: .withoutResponse)
+        let maxWriteWithResponse = peripheral.maximumWriteValueLength(for: .withResponse)
+        
+        print("Maximum Write Value Length (Without Response): \(maxWriteWithoutResponse) bytes")
+        print("Maximum Write Value Length (With Response): \(maxWriteWithResponse) bytes")
+        
     }
     
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
@@ -631,7 +641,7 @@ extension BLEManager: CBPeripheralDelegate {
         }
         
         print("Discovered \(characteristics.count) characteristics for service \(service.uuid)")
-        
+        checkMTUSizes()
         for characteristic in characteristics {
             print("Characteristic: \(characteristic.uuid)")
             
