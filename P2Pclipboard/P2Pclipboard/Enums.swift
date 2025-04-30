@@ -12,6 +12,7 @@ enum MessageContentType: UInt8 {
     case jpegImage = 4
     case pdfDocument = 5
     case htmlContent = 6
+    case webpImage = 7
 }
 
 enum CompressionLevel {
@@ -26,6 +27,15 @@ enum CompressionLevel {
         case .medium: return 0.7
         case .high: return 0.4
         case .extreme: return 0.2
+        }
+    }
+    
+    var webpQuality: CGFloat {
+        switch self {
+        case .low: return 0.9
+        case .medium: return 0.7
+        case .high: return 0.5
+        case .extreme: return 0.3
         }
     }
     

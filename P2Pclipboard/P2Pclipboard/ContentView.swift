@@ -68,7 +68,7 @@ struct ContentView: View {
                             
                             // Instructional subtext
                             Text("Copy this key to other devices to connect")
-                                .font(.subheadline)
+                                .font(.title3)
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal)
                             

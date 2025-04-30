@@ -705,6 +705,21 @@ extension BLEManager: CBPeripheralDelegate {
         }
     }
     
+    func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        print("Peripheral \(peripheral.name ?? "Unknown") modified services: \(invalidatedServices.map { $0.uuid })")
+        
+        // Check if our target service was invalidated
+        if invalidatedServices.contains(where: { $0.uuid == serviceUUID }) {
+            print("Our target service was modified, disconnecting and will attempt reconnect")
+            
+            // Use existing cleanup method which properly handles the disconnection
+            cleanupConnection(resetCentralManager: false)
+            
+            // The reconnection will be handled by centralManager(_:didDisconnectPeripheral:error:)
+            // which already has the logic to attempt reconnection with backoff
+        }
+    }
+    
     // Add this delegate method to your CBPeripheralDelegate extension
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         // Called when the peripheral is ready to receive more data
