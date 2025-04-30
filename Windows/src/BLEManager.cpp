@@ -1,5 +1,4 @@
 #include "BLEManager.h"
-#include "BLEPayload.h"
 #include "UUIDGenerator.h"
 #include <iostream>
 #include <algorithm>
@@ -114,18 +113,8 @@ bool BLEManager::initialize() {
 
         if (!createGattService()) {
             std::cerr << "Failed to create GATT service" << std::endl;
-            // Continue anyway, as we might still be able to advertise with manufacturer data
+            return false;
         }
-
-        // Create our payload
-        ClipboardSyncPayload payload;
-        payload.deviceName = deviceName;
-        payload.version = CLIPBOARD_SYNC_VERSION;
-        payload.deviceId = deviceId;
-
-        // First try manufacturer data approach
-        BluetoothLEAdvertisement advertisement = BLEPayloadManager::CreateAdvertisement(payload);
-        advertisementPublisher = BluetoothLEAdvertisementPublisher(advertisement);
 
         std::cout << "BLE Manager initialized successfully" << std::endl;
         return true;
@@ -220,6 +209,18 @@ bool BLEManager::createGattService() {
 
                 // Store a proper reference to the notification characteristic
                 wakeupCharacteristicRef = std::make_shared<GattLocalCharacteristic>(sender);
+
+                // If we have clients, determine the MTU of each one
+                for (uint32_t i = 0; i < clients.Size(); i++) {
+                    try {
+                        auto session = clients.GetAt(i).Session();
+                        std::cout << "Checking MTU for client " << i + 1 << ":" << std::endl;
+                        determineClientMTU(session);
+                    }
+                    catch (const winrt::hresult_error& ex) {
+                        std::cerr << "Error accessing client session: " << winrt::to_string(ex.message()) << std::endl;
+                    }
+                }
             });
 
         wakeupWriteRequestedToken = wakeupChar.WriteRequested(
@@ -232,7 +233,7 @@ bool BLEManager::createGattService() {
         dataParams.CharacteristicProperties(
             GattCharacteristicProperties::Read |
             GattCharacteristicProperties::Write |
-            GattCharacteristicProperties::Notify|
+            GattCharacteristicProperties::Notify |
             GattCharacteristicProperties::WriteWithoutResponse);
         dataParams.ReadProtectionLevel(GattProtectionLevel::Plain);
         dataParams.WriteProtectionLevel(GattProtectionLevel::Plain);
@@ -286,10 +287,6 @@ bool BLEManager::createGattService() {
 
 bool BLEManager::startAdvertising() {
     try {
-        if (advertisementPublisher.Status() == BluetoothLEAdvertisementPublisherStatus::Started) {
-            return true; // Already advertising
-        }
-
         // Try to start GATT advertising
         if (serviceProvider) {
             try {
@@ -299,40 +296,17 @@ bool BLEManager::startAdvertising() {
                 params.IsConnectable(true);
                 serviceProvider.StartAdvertising(params);
                 std::cout << "GATT advertising started successfully" << std::endl;
+                return true;
             }
             catch (const winrt::hresult_error& ex) {
                 std::cerr << "GATT advertising error: " << winrt::to_string(ex.message()) << std::endl;
-                // Continue with regular advertising even if GATT fails
+                return false;
             }
         }
-
-        // Create new payload
-        ClipboardSyncPayload payload;
-        payload.deviceName = deviceName;
-        payload.version = CLIPBOARD_SYNC_VERSION;
-        payload.deviceId = deviceId;
-
-        // Try to start advertisement publisher
-        try {
-            // If we already have a publisher, stop it first
-            if (advertisementPublisher) {
-                advertisementPublisher.Stop();
-            }
-
-            // Create new advertisement
-            BluetoothLEAdvertisement advertisement = BLEPayloadManager::CreateAdvertisement(payload);
-            advertisementPublisher = BluetoothLEAdvertisementPublisher(advertisement);
-
-            std::cout << "Starting advertisement publisher..." << std::endl;
-            advertisementPublisher.Start();
-            std::cout << "Advertisement publisher started successfully" << std::endl;
+        else {
+            std::cerr << "Cannot start advertising - no service provider available" << std::endl;
+            return false;
         }
-        catch (const winrt::hresult_error& ex) {
-            std::cerr << "Advertisement publisher error: " << winrt::to_string(ex.message()) << std::endl;
-        }
-
-        std::cout << "BLE advertising started" << std::endl;
-        return true;
     }
     catch (const winrt::hresult_error& ex) {
         std::cerr << "BLE advertising error: " << winrt::to_string(ex.message()) << std::endl;
@@ -342,19 +316,10 @@ bool BLEManager::startAdvertising() {
 
 void BLEManager::stopAdvertising() {
     try {
-        if (advertisementPublisher) {
-            if (advertisementPublisher.Status() == BluetoothLEAdvertisementPublisherStatus::Started) {
-                advertisementPublisher.Stop();
-                std::cout << "Advertisement publisher stopped" << std::endl;
-            }
-        }
-
         if (serviceProvider) {
             serviceProvider.StopAdvertising();
             std::cout << "GATT advertising stopped" << std::endl;
         }
-
-        std::cout << "BLE advertising stopped" << std::endl;
     }
     catch (const winrt::hresult_error& ex) {
         std::cerr << "BLE stop advertising error: " << winrt::to_string(ex.message()) << std::endl;
@@ -494,7 +459,8 @@ void BLEManager::handleCharacteristicWriteRequested(GattLocalCharacteristic send
                             uint8_t responseCode = rawData[0];
 
                             if (responseCode == 0x01) {
-                                // Client wants to use BLE
+                                // Client wants
+                                // to use BLE
                                 lastClientResponse.store(ClientResponseType::USE_BLE);
                                 std::cout << "Client responded: Use BLE for data transfer" << std::endl;
                             }
@@ -720,6 +686,24 @@ bool BLEManager::testEncodeDecodeMessage(const std::string& data) {
     catch (...) {
         std::cerr << "Unknown error in testEncodeDecodeMessage" << std::endl;
         return false;
+    }
+}
+
+void BLEManager::determineClientMTU(const GattSession& session) {
+    try {
+        // Get the max protocol payload size - this is what we can use
+        uint16_t maxPayloadSize = session.MaxPduSize();
+
+        // MTU = maxPayloadSize - 3 (ATT header)
+        // The ATT protocol overhead is 3 bytes
+        auto clientMTU = maxPayloadSize - 3;
+
+        std::cout << "Client connected with MTU: " << clientMTU << " bytes" << std::endl;
+        std::cout << "Max PDU Size: " << maxPayloadSize << " bytes" << std::endl;
+
+    }
+    catch (const winrt::hresult_error& ex) {
+        std::cerr << "Error determining client MTU: " << winrt::to_string(ex.message()) << std::endl;
     }
 }
 

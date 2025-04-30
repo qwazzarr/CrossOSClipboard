@@ -84,6 +84,7 @@ private:
 
     static GUID BLEManager::convertStringToGUID(const std::string& uuidString);
 
+    void BLEManager::determineClientMTU(const GattSession& session);
     // Device information
     std::string deviceName;
     std::string deviceId; // Unique identifier for this device instance

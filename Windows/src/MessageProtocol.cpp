@@ -51,7 +51,7 @@ std::vector<std::vector<uint8_t>> MessageProtocol::encodeMessage(
         std::vector<uint8_t> chunk;
 
         // Calculate total length of this message (header + payload)
-        uint32_t totalLength = HEADER_SIZE + static_cast<uint32_t>(payload.size());
+        uint32_t totalLength = HEADER_SIZE + static_cast<uint32_t>(encryptedPayload.size());
 
         // Reserve space for the entire message
         chunk.reserve(totalLength);
@@ -75,13 +75,13 @@ std::vector<std::vector<uint8_t>> MessageProtocol::encodeMessage(
         chunk.insert(chunk.end(), totalChunksBytes.begin(), totalChunksBytes.end());
 
         // Append payload
-        chunk.insert(chunk.end(), payload.begin(), payload.end());
+        chunk.insert(chunk.end(), encryptedPayload.begin(), encryptedPayload.end());
 
         return { chunk };
     }
     else {
         // For BLE, we need to chunk the data
-        auto chunks = chunkedData(payload, BLE_MAX_CHUNK_SIZE);
+        auto chunks = chunkedData(encryptedPayload, BLE_MAX_CHUNK_SIZE);
         uint32_t totalChunks = static_cast<uint32_t>(chunks.size());  // Now 4-byte value
 
         // Create a data chunk for each piece
