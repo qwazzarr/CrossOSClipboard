@@ -10,7 +10,7 @@ enum TransportType {
 // MARK: - Protocol Handler
 class MessageProtocol {
     // BLE packet size constraint
-    private static let bleMaxChunkSize = 519 - headerSize
+    private static let bleMaxChunkSize = 512 - headerSize
     
     // Current protocol version
     private static let protocolVersion: UInt16 = 1
@@ -165,7 +165,13 @@ class MessageProtocol {
         
         // For single-chunk messages, return immediately
         if totalChunks == 1 {
-            let message:Message = Message(contentType: contentType, transferId: transferId, payload: payload)
+            
+            guard let decryptedPayload = ClipboardEncryption.decrypt(encryptedData: payload) else {
+                print("Failed to decrypt the payload with secret key")
+                return nil// Return empty array to indicate failure
+            }
+            
+            let message:Message = Message(contentType: contentType, transferId: transferId, payload: decryptedPayload)
             print("We've just decoded a complete message: \(message)")
             return message
         }
